@@ -23,22 +23,26 @@ P_SCALE = 32767 / 0.02
 
 
 def load_preset(sim: Simulation, name: str):
+    """Scenariusze skalowane względem krótszego wymiaru, żeby blokada tunelu była rozsądna przy każdych proporcjach."""
     sim.solid[:] = False
     nx, ny = sim.nx, sim.ny
+    s = min(ny, nx / 2.0)  # skala odniesienia
+    cy = ny / 2
+    x0 = min(nx * 0.3, s * 1.2)
     if name == "cylinder":
-        sim.add_circle(nx * 0.2, ny / 2 + 0.5, ny * 0.09)
+        sim.add_circle(x0, cy + 0.5, s * 0.08)
     elif name == "airfoil":
-        sim.add_airfoil(nx * 0.22, ny / 2, nx * 0.3, math.radians(8))
+        sim.add_airfoil(x0, cy, s * 0.55, math.radians(8))
     elif name == "tandem":
-        sim.add_airfoil(nx * 0.12, ny * 0.40, nx * 0.22, math.radians(10))
-        sim.add_airfoil(nx * 0.48, ny * 0.60, nx * 0.22, math.radians(4))
+        sim.add_airfoil(x0 * 0.7, cy - s * 0.1, s * 0.4, math.radians(10))
+        sim.add_airfoil(x0 * 0.7 + s * 0.55, cy + s * 0.08, s * 0.4, math.radians(4))
     elif name == "grid":
         for i in range(5):
-            sim.add_circle(nx * 0.18, ny * (0.12 + 0.19 * i), ny * 0.05)
+            sim.add_circle(x0, cy + (i - 2) * s * 0.19, s * 0.045)
     elif name == "step":
-        sim.add_rect(nx * 0.15, ny * 0.55, nx * 0.4, ny)
+        sim.add_rect(x0, ny - s * 0.35, x0 + s * 0.5, ny)
     elif name == "plate":
-        sim.add_rect(nx * 0.2, ny * 0.3, nx * 0.2 + 4, ny * 0.7)
+        sim.add_rect(x0, cy - s * 0.12, x0 + 4, cy + s * 0.12)
     else:
         sim.clear()
     sim.reset_flow()
@@ -46,7 +50,7 @@ def load_preset(sim: Simulation, name: str):
 
 
 def pack(sim: Simulation, fps: float, mlups: float) -> bytes:
-    L = sim.body_length()
+    L = sim.ref_length()
     q = 0.5 * sim.u_in**2 * max(L, 1.0)
     cd, cl = (sim.force[0] / q, -sim.force[1] / q) if L else (0.0, 0.0)
     re = sim.u_in * L / sim.nu
@@ -120,6 +124,12 @@ class Runner(threading.Thread):
                 except queue.Empty:
                     break
                 try:
+                    if msg.get("type") == "resize":
+                        ny = int(np.clip(msg.get("ny", 200), 100, 320))
+                        nx = int(np.clip(round(ny * float(msg["aspect"])), 160, 1100))
+                        if nx != sim.nx or ny != sim.ny:
+                            sim = self.sim = sim.resized(nx, ny)
+                        continue
                     handle(sim, msg)
                 except (KeyError, TypeError, ValueError) as e:
                     print("bad message:", e)

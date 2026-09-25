@@ -9,14 +9,14 @@ W = np.array([4 / 9] + [1 / 9] * 4 + [1 / 36] * 4, dtype=np.float32)
 OPP = np.array([0, 3, 4, 1, 2, 7, 8, 5, 6])
 MOM = np.stack([np.ones(9), CX, CY, CX * CX, CY * CY, CX * CY]).astype(np.float32)
 CS_SMAG = 0.14
-SPONGE = 24
+SPONGE = 48
 
 
 class Simulation:
     def __init__(self, nx: int = 480, ny: int = 192):
         self.nx, self.ny = nx, ny
         self.u_in = 0.10
-        self.nu = 0.004
+        self.nu = 0.008
         self.steps_per_frame = 10
         self.paused = False
         self.step_count = 0
@@ -71,7 +71,7 @@ class Simulation:
         return self._step_numpy(n)
 
     def _step_numba(self, n: int):
-        tau0 = self._tau0()[0].astype(np.float32)
+        tau0 = np.full(self.nx, 3.0 * self.nu + 0.5, np.float32)
         force = np.zeros(2, np.float64)
         f, g = self.f, getattr(self, "_g", None)
         if g is None or g.shape != f.shape:
@@ -79,7 +79,7 @@ class Simulation:
         rho = np.empty((self.ny, self.nx), np.float32)
         ux, uy = np.empty_like(rho), np.empty_like(rho)
         for _ in range(n):
-            _kernel(f, g, self.solid, tau0, np.float32(self.u_in), np.float32(CS_SMAG), rho, ux, uy, force)
+            _kernel(f, g, self.solid, tau0, np.float32(self.u_in), np.float32(CS_SMAG), SPONGE, rho, ux, uy, force)
             f, g = g, f
         if not np.isfinite(f).all():
             self.reset_flow()
@@ -202,9 +202,27 @@ class Simulation:
         self.solid[m] = value
         self._update_mask()
 
-    def body_length(self):
-        cols = np.where(self.solid[1:-1].any(0))[0]
-        return float(cols.max() - cols.min() + 1) if len(cols) else 0.0
+    def resized(self, nx: int, ny: int) -> "Simulation":
+        """Nowa symulacja o innej siatce z przeskalowanymi przeszkodami i tymi samymi parametrami."""
+        sim = Simulation(nx, ny)
+        sim.u_in, sim.nu, sim.steps_per_frame, sim.paused = self.u_in, self.nu, self.steps_per_frame, self.paused
+        # skala wg wysokości, przeszkody zakotwiczone do wlotu
+        k = self.ny / ny
+        ys = np.clip((np.arange(ny) * k).astype(int), 0, self.ny - 1)
+        xs = (np.arange(nx) * k).astype(int)
+        valid = xs < self.nx
+        sim.solid[:, valid] = self.solid[np.ix_(ys, xs[valid])]
+        sim.reset_flow()
+        sim._update_mask()
+        return sim
+
+    def ref_length(self):
+        """Długość odniesienia: cięciwa dla smukłych ciał, wysokość czołowa dla tępych."""
+        cols = np.where(self.solid.any(0))[0]
+        rows = np.where(self.solid.any(1))[0]
+        if not len(cols):
+            return 0.0
+        return float(max(cols.max() - cols.min(), rows.max() - rows.min()) + 1)
 
 
 def naca_polygon(x, y, chord, angle, t=0.12, m=0.04, p=0.4, n=60):
@@ -242,9 +260,10 @@ if HAS_NUMBA:
     _CYi = CY.astype(np.int64)
     _W32 = W.astype(np.float32)
     _OPPi = OPP.astype(np.int64)
+    _MIRi = np.array([0, 1, 4, 3, 2, 8, 7, 6, 5], dtype=np.int64)
 
     @njit(parallel=True, fastmath=True, cache=True)
-    def _kernel(fin, fout, solid, tau0, u_in, cs, rho_o, ux_o, uy_o, force):
+    def _kernel(fin, fout, solid, tau0, u_in, cs, sponge, rho_o, ux_o, uy_o, force):
         """Pull-streaming + half-way bounce-back + BGK/Smagorinsky, jedna pętla po siatce."""
         _, ny, nx = fin.shape
         fxs = np.zeros(ny)
@@ -259,15 +278,16 @@ if HAS_NUMBA:
                     ux_o[y, x] = 0.0
                     uy_o[y, x] = 0.0
                     continue
-                edge = x == 0 or y == 0 or y == ny - 1
-                if edge:
-                    r = np.float32(1.0)
+                if x == 0:
+                    r = np.float32(0.0)
+                    for i in range(9):
+                        r += fin[i, y, 1]
                     u = u_in
                     v = np.float32(0.0)
                     usq = 1.5 * u * u
                     for i in range(9):
                         cu = 3.0 * _CXi[i] * u
-                        fout[i, y, x] = _W32[i] * (1.0 + cu + 0.5 * cu * cu - usq)
+                        fout[i, y, x] = _W32[i] * r * (1.0 + cu + 0.5 * cu * cu - usq)
                     rho_o[y, x] = r
                     ux_o[y, x] = u
                     uy_o[y, x] = v
@@ -277,6 +297,10 @@ if HAS_NUMBA:
                     sy = y - _CYi[i]
                     if sx >= nx:
                         sx = nx - 1
+                    if sy < 0 or sy >= ny:
+                        # ściana poślizgowa (odbicie lustrzane) na górze i dole tunelu
+                        fl[i] = fin[_MIRi[i], y, sx]
+                        continue
                     if solid[sy, sx]:
                         # half-way bounce-back: odbita populacja z tej komórki
                         val = fin[_OPPi[i], y, x]
@@ -306,9 +330,9 @@ if HAS_NUMBA:
                 u = jx / r
                 v = jy / r
                 sp = np.sqrt(u * u + v * v)
-                if sp > 0.3:
-                    u *= 0.3 / sp
-                    v *= 0.3 / sp
+                if sp > 0.4:
+                    u *= 0.4 / sp
+                    v *= 0.4 / sp
                 pxx -= r * (1.0 / 3.0 + u * u)
                 pyy -= r * (1.0 / 3.0 + v * v)
                 pxy -= r * u * v
@@ -317,10 +341,20 @@ if HAS_NUMBA:
                 tau = 0.5 * (t0 + np.sqrt(t0 * t0 + 18.0 * cs * cs * q / r))
                 om = 1.0 / tau
                 usq = 1.5 * (u * u + v * v)
+                sg = 0.0
+                if x > nx - sponge:
+                    a = (x - (nx - sponge)) / sponge
+                    sg = 0.25 * a * a
+                usq0 = 1.5 * u_in * u_in
                 for i in range(9):
                     cu = 3.0 * (_CXi[i] * u + _CYi[i] * v)
                     feq = _W32[i] * r * (1.0 + cu + 0.5 * cu * cu - usq)
-                    fout[i, y, x] = fl[i] + om * (feq - fl[i])
+                    post = fl[i] + om * (feq - fl[i])
+                    if sg > 0.0:
+                        c0 = 3.0 * _CXi[i] * u_in
+                        f0 = _W32[i] * (1.0 + c0 + 0.5 * c0 * c0 - usq0)
+                        post += sg * (f0 - post)
+                    fout[i, y, x] = post
                 rho_o[y, x] = r
                 ux_o[y, x] = u
                 uy_o[y, x] = v

@@ -1,6 +1,7 @@
 // Renderowanie pola (mapy kolorów) i cząstek-znaczników.
 import { Frame, P_SCALE, U_SCALE } from "./sim";
 
+export type Palette = "ocean" | "arctic" | "abyss";
 export type ViewMode = "speed" | "vorticity" | "pressure" | "none";
 export type ParticleMode = "off" | "tracers" | "smoke";
 
@@ -23,6 +24,8 @@ function lut(stops: [number, string][]): Uint8Array {
 }
 
 export const LUTS = {
+  arctic: lut([[0, "#0b1220"], [0.35, "#1b3b6f"], [0.6, "#6aa9e9"], [0.85, "#dbeeff"], [1, "#ffffff"]]),
+  abyss: lut([[0, "#000000"], [0.4, "#00334d"], [0.7, "#00a3cc"], [0.9, "#7ff7ff"], [1, "#ffffff"]]),
   ocean: lut([[0, "#020617"], [0.25, "#0a2a5e"], [0.5, "#1463c7"], [0.72, "#3fb8f5"], [0.9, "#a8ecff"], [1, "#f4fdff"]]),
   diverging: lut([[0, "#7dd3fc"], [0.2, "#1d6fd8"], [0.45, "#08122c"], [0.5, "#050b1c"], [0.55, "#2a0f2e"], [0.8, "#e0487a"], [1, "#ffd1a6"]]),
   pressure: lut([[0, "#1e3a8a"], [0.3, "#2f7ff0"], [0.5, "#0b1430"], [0.7, "#f59e0b"], [1, "#fff4c2"]]),
@@ -35,7 +38,7 @@ export class FieldRenderer {
   private ctx = this.canvas.getContext("2d")!;
   private img?: ImageData;
 
-  draw(fr: Frame, mode: ViewMode, gain: number) {
+  draw(fr: Frame, mode: ViewMode, gain: number, palette: Palette = "ocean") {
     const { nx, ny, ux, uy, p, solid } = fr;
     if (!this.img || this.img.width !== nx || this.img.height !== ny) {
       this.canvas.width = nx;
@@ -43,7 +46,7 @@ export class FieldRenderer {
       this.img = this.ctx.createImageData(nx, ny);
     }
     const d = this.img.data;
-    const L = mode === "speed" ? LUTS.ocean : mode === "vorticity" ? LUTS.diverging : LUTS.pressure;
+    const L = mode === "speed" ? LUTS[palette] : mode === "vorticity" ? LUTS.diverging : LUTS.pressure;
     const ref = Math.max(fr.u, 0.02);
     for (let y = 0; y < ny; y++) {
       for (let x = 0; x < nx; x++) {
@@ -61,9 +64,9 @@ export class FieldRenderer {
           const xm = x > 0 ? i - 1 : i, xp = x < nx - 1 ? i + 1 : i;
           const ym = y > 0 ? i - nx : i, yp = y < ny - 1 ? i + nx : i;
           const w = ((uy[xp] - uy[xm]) - (ux[yp] - ux[ym])) * 0.5 * U_SCALE;
-          t = 0.5 + (w / ref) * 2.2 * gain;
+          t = 0.5 + 0.5 * Math.tanh((w / ref) * 1.4 * gain);
         } else if (mode === "pressure") {
-          t = 0.5 + ((p[i] * P_SCALE) / (ref * ref)) * 0.9 * gain;
+          t = 0.5 + 0.5 * Math.tanh(((p[i] * P_SCALE) / (ref * ref)) * 1.2 * gain);
         } else {
           t = 0.04;
         }
@@ -153,5 +156,80 @@ export class Particles {
       ctx.lineTo(this.xs[i] * sx + 0.01, this.ys[i] * sy);
     }
     ctx.stroke();
+  }
+}
+
+/** Gładka warstwa ciał stałych: maska próbkowana bilinearnie w rozdzielczości ekranu, liczona tylko przy zmianie kształtu. */
+export class SolidLayer {
+  canvas = document.createElement("canvas");
+  private sig = "";
+
+  update(fr: Frame, W: number, H: number) {
+    const { nx, ny, solid } = fr;
+    let h = 0, cnt = 0;
+    for (let i = 0; i < solid.length; i++) if (solid[i]) { h = (h * 31 + i) | 0; cnt++; }
+    const sig = `${nx}x${ny}:${W}x${H}:${cnt}:${h}`;
+    if (sig === this.sig) return;
+    this.sig = sig;
+    const cv = this.canvas;
+    cv.width = W;
+    cv.height = H;
+    const ctx = cv.getContext("2d")!;
+    const img = ctx.createImageData(W, H);
+    const d = img.data;
+    // maska rozmyta 2× filtrem 3×3 → kontur 0.5 staje się gładki zamiast schodkowego
+    let m = Float32Array.from(solid);
+    for (let pass = 0; pass < 2; pass++) {
+      const o = new Float32Array(m.length);
+      for (let y = 0; y < ny; y++) {
+        for (let x = 0; x < nx; x++) {
+          let acc = 0, n = 0;
+          for (let dy = -1; dy <= 1; dy++) {
+            const yy = y + dy;
+            if (yy < 0 || yy >= ny) continue;
+            for (let dx = -1; dx <= 1; dx++) {
+              const xx = x + dx;
+              if (xx < 0 || xx >= nx) continue;
+              acc += m[yy * nx + xx]; n++;
+            }
+          }
+          o[y * nx + x] = acc / n;
+        }
+      }
+      m = o;
+    }
+    const kx = nx / W, ky = ny / H;
+    const aa = 0.35 * 1.6 / Math.min(W / nx, H / ny); // szerokość wygładzenia ~1.6 px ekranu
+    for (let py = 0; py < H; py++) {
+      const gy = (py + 0.5) * ky - 0.5;
+      const y0 = Math.max(0, Math.min(ny - 2, Math.floor(gy)));
+      const fy = Math.min(1, Math.max(0, gy - y0));
+      for (let px = 0; px < W; px++) {
+        const gx = (px + 0.5) * kx - 0.5;
+        const x0 = Math.max(0, Math.min(nx - 2, Math.floor(gx)));
+        const i = y0 * nx + x0;
+        const a = m[i], b = m[i + 1], c = m[i + nx], e = m[i + nx + 1];
+        if (a + b + c + e < 0.4) continue;
+        const fx = Math.min(1, Math.max(0, gx - x0));
+        const v = (a * (1 - fx) + b * fx) * (1 - fy) + (c * (1 - fx) + e * fx) * fy;
+        const t = Math.min(1, Math.max(0, (v - 0.5) / aa + 0.5));
+        if (t <= 0) continue;
+        const o = (py * W + px) * 4;
+        // lekki gradient pionowy daje wrażenie bryły
+        const shade = 236 - (py / H) * 26;
+        d[o] = shade - 8; d[o + 1] = shade - 2; d[o + 2] = shade + 10; d[o + 3] = t * 255;
+      }
+    }
+    // poświata wypiekana raz do bufora, nie w każdej klatce
+    const tmp = document.createElement("canvas");
+    tmp.width = W;
+    tmp.height = H;
+    tmp.getContext("2d")!.putImageData(img, 0, 0);
+    ctx.clearRect(0, 0, W, H);
+    ctx.shadowColor = "rgba(56,189,248,0.55)";
+    ctx.shadowBlur = 16;
+    ctx.drawImage(tmp, 0, 0);
+    ctx.shadowBlur = 0;
+    ctx.drawImage(tmp, 0, 0);
   }
 }
