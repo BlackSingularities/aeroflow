@@ -36,11 +36,12 @@ przeciągane i zwijane okna **Ustawienia** (Przepływ / Wygląd / Solver), **Wyk
 ## Wydajność
 
 - Solver D2Q9 w jednym kernelu **numba `@njit(parallel=True, fastmath=True)`**: pull-streaming + half-way bounce-back + kolizja BGK w jednym przejściu po pamięci, równolegle po wierszach — ok. **150–230 MLUPS** na CPU (≈30× szybciej niż wektoryzowany numpy).
-- Model turbulencji **Smagorinsky LES** (tensor naprężeń z momentów, bez dodatkowych przebiegów). Brzegi: wlot prędkościowy z ekstrapolowaną gęstością, ściany poślizgowe u góry i dołu, strefa gąbki relaksująca do strumienia swobodnego na wylocie — bez odbić fal i wirów.
+- **Regularyzowana kolizja** (rekonstrukcja części nierównowagowej z tensora naprężeń) + **Smagorinsky LES** — stabilna przy niskiej lepkości (Re ≈ 5–10 tys.) bez prążków i szachownicy, więc ślad i ścieżki wirów pozostają turbulentne.
+- **Domena otwarta**: nad, pod i za widocznym obszarem są niewidoczne marginesy ze strefami pochłaniającymi, a wlot jest poza ekranem — brak ścian tunelu i sztucznego wygaszania wirów na krawędziach obrazu.
+- Opcjonalna **turbulencja wlotu** (0–10%) i łagodny rozruch z bocznym podmuchem łamiącym symetrię.
 - Gładkie kontury ciał liczone tylko przy zmianie kształtu (rozmyta maska + próg), poświata wypiekana do bufora.
 - Symulacja działa w osobnym wątku z precyzyjnym taktowaniem 60 Hz; WebSocket zawsze wysyła najświeższą klatkę (wolny klient gubi klatki zamiast budować kolejkę).
 - Binarny protokół: pola jako `int16`, maska ciał upakowana bitowo; ciśnienie i dym wysyłane tylko gdy są wyświetlane; lista obiektów i mapa etykiet tylko po zmianie geometrii.
-- Łagodny rozruch strumienia (1200 kroków) — bez fali uderzeniowej i stojących fal akustycznych.
 - Domyślna siatka ~500×280 (do ~790×440 w trybie Maks.) przy 60 fps.
 - Frontend: kolory przez LUT, pole renderowane w rozdzielczości siatki i skalowane na GPU, cząstki rysowane jedną ścieżką na klatkę.
 

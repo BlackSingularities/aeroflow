@@ -162,6 +162,8 @@ def handle(sim: Simulation, msg: dict):
             sim.u_in = float(np.clip(msg["u"], 0.01, 0.2))
         if "nu" in msg:
             sim.nu = float(np.clip(msg["nu"], 0.0005, 0.2))
+        if "turb" in msg:
+            sim.turbulence = float(np.clip(msg["turb"], 0.0, 0.15))
         if "steps" in msg:
             sim.steps_per_frame = int(np.clip(msg["steps"], 1, 30))
         if "paused" in msg:

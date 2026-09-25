@@ -12,9 +12,9 @@ const TOOLS: { id: Tool; label: string; key: string; hint: string }[] = [
   { id: "select", label: "Zaznacz", key: "1", hint: "Przeciągnij obiekt, aby go przesunąć · kółko myszy obraca · prawy przycisk: opcje · Del usuwa" },
   { id: "airfoil", label: "Skrzydło", key: "2", hint: "Przeciągnij od noska do krawędzi spływu — długość to cięciwa, kierunek to kąt natarcia" },
   { id: "polygon", label: "Kształt", key: "3", hint: "Narysuj obrys — po puszczeniu zostanie wypełniony" },
-  { id: "brush", label: "Pędzel", key: "4", hint: "Maluj ściany · prawy przycisk na pustym polu wymazuje" },
-  { id: "circle", label: "Koło", key: "5", hint: "Przeciągnij od środka, aby ustawić promień" },
-  { id: "rect", label: "Prostokąt", key: "6", hint: "Przeciągnij po przekątnej" },
+  { id: "circle", label: "Koło", key: "4", hint: "Przeciągnij od środka, aby ustawić promień" },
+  { id: "rect", label: "Prostokąt", key: "5", hint: "Przeciągnij po przekątnej" },
+  { id: "brush", label: "Pędzel", key: "6", hint: "Maluj ściany · prawy przycisk na pustym polu wymazuje" },
   { id: "erase", label: "Gumka", key: "7", hint: "Wymazuj fragmenty przeszkód" },
 ];
 
@@ -45,8 +45,9 @@ const PMODES: { id: ParticleMode; label: string; icon: string }[] = [
 ];
 const nextPmode = (m: ParticleMode) => PMODES[(PMODES.findIndex((x) => x.id === m) + 1) % PMODES.length].id;
 
-const nuFromSlider = (s: number) => 0.001 * Math.pow(0.06 / 0.001, s);
-const sliderFromNu = (nu: number) => Math.log(nu / 0.001) / Math.log(0.06 / 0.001);
+const NU_MIN = 0.0006, NU_MAX = 0.05;
+const nuFromSlider = (s: number) => NU_MIN * Math.pow(NU_MAX / NU_MIN, s);
+const sliderFromNu = (nu: number) => Math.log(nu / NU_MIN) / Math.log(NU_MAX / NU_MIN);
 
 interface Stats { canUndo: boolean; canRedo: boolean; cd: number; cl: number; re: number; fps: number; mlups: number; step: number; length: number; nx: number; ny: number }
 
@@ -66,9 +67,10 @@ export default function App() {
   const [pcount, setPcount] = usePersist("pcount", 3000);
   const [trailLen, setTrailLen] = usePersist("trail", 0.5);
   const [brush, setBrush] = useState(3);
-  const [u, setU] = useState(0.1);
-  const [nuS, setNuS] = useState(sliderFromNu(0.008));
-  const [steps, setSteps] = usePersist("steps", 10);
+  const [u, setU] = useState(0.08);
+  const [nuS, setNuS] = useState(sliderFromNu(0.002));
+  const [turb, setTurb] = useState(0);
+  const [steps, setSteps] = usePersist("steps2", 8);
   const [res, setRes] = usePersist("res2", "280");
   const [arrows, setArrows] = usePersist("arrows", true);
   const [gain, setGain] = usePersist("gain", 1);
@@ -138,7 +140,7 @@ export default function App() {
     return () => { clearTimeout(t); window.removeEventListener("resize", fit); };
   }, [res, send, status]);
 
-  useEffect(() => send({ type: "params", u, nu: nuFromSlider(nuS), steps, paused }), [u, nuS, steps, paused, send, status]);
+  useEffect(() => send({ type: "params", u, nu: nuFromSlider(nuS), steps, paused, turb: turb / 100 }), [u, nuS, steps, paused, turb, send, status]);
   // serwer liczy i wysyła tylko pola, które są faktycznie potrzebne
   useEffect(() => {
     const fields: string[] = [];
@@ -647,16 +649,17 @@ export default function App() {
           <div className="tab-body" key={settingsTab}>
             {settingsTab === "flow" && (
               <>
-                <Slider label="Prędkość wlotu" value={u} min={0.02} max={0.16} step={0.005} onChange={setU} display={`${(u / 0.1).toFixed(2)}×`} hint="Prędkość w jednostkach sieci; powyżej ~0,15 rośnie ściśliwość" />
+                <Slider label="Prędkość wlotu" value={u} min={0.02} max={0.16} step={0.005} onChange={setU} display={`${(u / 0.08).toFixed(2)}×`} hint="Prędkość w jednostkach sieci; powyżej ~0,12 rośnie ściśliwość" />
                 <Slider label="Lepkość" value={nuS} min={0} max={1} step={0.01} onChange={setNuS} display={nuFromSlider(nuS).toFixed(4)} hint="Mniejsza lepkość = wyższa liczba Reynoldsa i bardziej burzliwy ślad" />
+                <Slider label="Turbulencja wlotu" value={turb} min={0} max={10} step={0.5} onChange={setTurb} display={turb ? `${turb}%` : "brak"} hint="Zaburzenia napływającego strumienia — przyspiesza przejście do turbulencji" />
                 <div className="readout">
                   <div><span>Reynolds</span><b>{stats ? fmtBig(stats.re) : "—"}</b></div>
                   <div><span>L<sub>ref</sub></span><b>{stats?.length ? stats.length.toFixed(0) : "—"}</b></div>
                   <div><span>Mach</span><b>{(u * Math.sqrt(3)).toFixed(2)}</b></div>
                 </div>
                 <div className="quick">
-                  {[{ l: "Laminarny", nu: 0.04 }, { l: "Przejściowy", nu: 0.01 }, { l: "Burzliwy", nu: 0.002 }].map((q) => (
-                    <button key={q.l} className="chip" onClick={() => setNuS(sliderFromNu(q.nu))}>{q.l}</button>
+                  {[{ l: "Laminarny", nu: 0.03, t: 0 }, { l: "Przejściowy", nu: 0.006, t: 0 }, { l: "Burzliwy", nu: 0.0012, t: 3 }].map((q) => (
+                    <button key={q.l} className="chip" onClick={() => { setNuS(sliderFromNu(q.nu)); setTurb(q.t); }}>{q.l}</button>
                   ))}
                 </div>
               </>

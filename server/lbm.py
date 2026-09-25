@@ -12,17 +12,27 @@ CX = np.array([0, 1, 0, -1, 0, 1, -1, -1, 1])
 CY = np.array([0, 0, 1, 0, -1, 1, 1, -1, -1])
 W = np.array([4 / 9] + [1 / 9] * 4 + [1 / 36] * 4, dtype=np.float32)
 OPP = np.array([0, 3, 4, 1, 2, 7, 8, 5, 6])
-CS_SMAG = 0.14
-SPONGE = 48
+CS_SMAG = 0.16
+SPONGE = 28
+MARGIN = 0.2  # niewidoczny margines nad i pod obrazem (ułamek wysokości) — domena otwarta
+MARGIN_OUT = 0.25  # niewidoczny margines za prawą krawędzią (strefa wylotu)
+MARGIN_IN = 6  # niewidoczne kolumny wlotu po lewej
 RAMP_STEPS = 1200  # łagodny rozruch strumienia — bez fali uderzeniowej i stojących fal akustycznych
 
 
 class Simulation:
     def __init__(self, nx: int = 480, ny: int = 192):
         self.nx, self.ny = nx, ny
-        self.u_in = 0.10
-        self.nu = 0.008
-        self.steps_per_frame = 10
+        self.m = max(16, int(round(ny * MARGIN)))
+        self.nyt = ny + 2 * self.m  # pełna wysokość obliczeniowa
+        self.ml = MARGIN_IN
+        self.mr = max(32, int(round(ny * MARGIN_OUT)))
+        self.nxt = nx + self.ml + self.mr  # pełna szerokość obliczeniowa
+        # wycinek widocznej części w pełnej siatce
+        self.vis = (slice(self.m, self.m + ny), slice(self.ml, self.ml + nx))
+        self.u_in = 0.08
+        self.nu = 0.002
+        self.steps_per_frame = 8
         self.paused = False
         self.step_count = 0
         self.bodies: list[Body] = []
@@ -30,24 +40,30 @@ class Simulation:
         self.selected: int | None = None
         self.grabbed: int | None = None
         self.active_paint: int | None = None
-        self.solid = np.zeros((ny, nx), dtype=bool)
+        self.solid_full = np.zeros((self.nyt, self.nxt), dtype=bool)
+        self.solid = self.solid_full[self.vis]  # widok widocznej części
         self.labels = np.zeros((ny, nx), dtype=np.uint8)
         self.dye = np.zeros((ny, nx), dtype=np.float32)
         self.dye_on = False
         self.send_p = True
         self.undo_stack: list[list[Body]] = []
         self.redo_stack: list[list[Body]] = []
+        self.turbulence = 0.0  # intensywność turbulencji wlotu (ułamek U)
+        self._phase = np.random.default_rng(0).uniform(0, 2 * np.pi, (6, 2))
         self.force = np.zeros(2)
+        yy = np.arange(self.nyt, dtype=np.float32)
+        a = np.clip(np.maximum(self.m - yy, yy - (self.m + ny - 1)) / self.m, 0, 1)
+        self.sponge_row = (0.12 * a * a).astype(np.float32)
         self.reset_flow()
 
     # ------------------------------------------------------------------ przepływ
     def reset_flow(self):
-        ny, nx = self.ny, self.nx
-        rho = np.ones((ny, nx), np.float32)
-        zero = np.zeros((ny, nx), np.float32)
-        self.f = np.ascontiguousarray((W[:, None, None] * rho[None]).astype(np.float32))
+        ny, nx, nyt = self.ny, self.nx, self.nyt
+        self.f = np.ascontiguousarray(np.broadcast_to(W[:, None, None], (9, nyt, self.nxt)).astype(np.float32))
         self._g = np.empty_like(self.f)
-        self.rho, self.ux, self.uy = rho, zero, zero.copy()
+        self.rho = np.ones((ny, nx), np.float32)
+        self.ux = np.zeros((ny, nx), np.float32)
+        self.uy = np.zeros((ny, nx), np.float32)
         self.dye = np.zeros((ny, nx), dtype=np.float32)
         self.step_count = 0
 
@@ -55,25 +71,52 @@ class Simulation:
         a = min(1.0, self.step_count / RAMP_STEPS)
         return self.u_in * a * a * (3 - 2 * a)
 
+    def inlet(self, u: float):
+        """Profil wlotu: strumień jednorodny + opcjonalne zaburzenia (suma modów o losowych fazach)."""
+        ny = self.nyt
+        iu = np.full(ny, u, np.float32)
+        iv = np.zeros(ny, np.float32)
+        if self.turbulence > 0 and u > 0:
+            y = np.arange(ny) / ny
+            t = self.step_count * u / ny
+            du = np.zeros(ny)
+            dv = np.zeros(ny)
+            for k in range(6):
+                kk = k + 2
+                du += np.sin(2 * np.pi * (kk * y + 1.7 * kk * t) + self._phase[k, 0]) / kk
+                dv += np.sin(2 * np.pi * (kk * y - 1.3 * kk * t) + self._phase[k, 1]) / kk
+            norm = self.turbulence * u / 0.9
+            iu += (du * norm).astype(np.float32)
+            iv += (dv * norm).astype(np.float32)
+        # krótki boczny podmuch po starcie łamie symetrię — ścieżka wirów rozwija się od razu
+        if RAMP_STEPS * 0.5 < self.step_count < RAMP_STEPS * 2.5:
+            ph = (self.step_count - RAMP_STEPS * 0.5) / (RAMP_STEPS * 2.0)
+            iv += np.float32(0.06 * u * math.sin(math.pi * ph))
+        return iu, iv
+
     def step(self, n: int):
-        tau0 = np.full(self.nx, 3.0 * self.nu + 0.5, np.float32)
+        tau0 = np.full(self.nxt, 3.0 * self.nu + 0.5, np.float32)
         force = np.zeros(2, np.float64)
         f, g = self.f, self._g
-        rho = np.empty((self.ny, self.nx), np.float32)
+        rho = np.empty((self.nyt, self.nxt), np.float32)
         ux, uy = np.empty_like(rho), np.empty_like(rho)
         for _ in range(n):
-            _kernel(f, g, self.solid, tau0, np.float32(self.inflow()), np.float32(CS_SMAG), SPONGE, rho, ux, uy, force)
+            u = self.inflow()
+            iu, iv = self.inlet(u)
+            _kernel(f, g, self.solid_full, tau0, np.float32(u), iu, iv, np.float32(CS_SMAG), self.mr, self.sponge_row, rho, ux, uy, force)
             f, g = g, f
             self.step_count += 1
         if not np.isfinite(f).all():
             self.reset_flow()
             return
         self.f, self._g = f, g
-        self.rho, self.ux, self.uy = rho, ux, uy
+        v = self.vis
+        self.rho, self.ux, self.uy = rho[v], ux[v], uy[v]
         self.force = force / n
         if self.dye_on:
             out = np.empty_like(self.dye)
-            _advect_dye(self.dye, out, ux, uy, self.solid, np.float32(n), max(6, self.ny // 24))
+            _advect_dye(self.dye, out, np.ascontiguousarray(self.ux), np.ascontiguousarray(self.uy),
+                        np.ascontiguousarray(self.solid), np.float32(n), max(6, self.ny // 24))
             self.dye = out
 
     # ------------------------------------------------------------------ ciała
@@ -88,13 +131,13 @@ class Simulation:
             h, w = m.shape
             solid[y0:y0 + h, x0:x0 + w] |= m
             labels[y0:y0 + h, x0:x0 + w][m] = k + 1
-        solid[:, :2] = False
-        labels[:, :2] = 0
         newly = solid & ~self.solid
-        self.solid, self.labels = solid, labels
+        self.solid_full[self.vis] = solid
+        self.labels = labels
         # w komórkach, które właśnie stały się ciałem, zerujemy prędkość
         if newly.any():
-            self.f[:, newly] = W[:, None]
+            fv = self.f[(slice(None),) + self.vis]
+            fv[:, newly] = W[:, None]
         self.bodies_version += 1
 
     def body(self, bid):
@@ -216,7 +259,7 @@ class Simulation:
         """Nowa siatka: ciała przeskalowane względem wysokości, parametry zachowane."""
         k = ny / self.ny
         sim = Simulation(nx, ny)
-        sim.u_in, sim.nu, sim.steps_per_frame, sim.paused = self.u_in, self.nu, self.steps_per_frame, self.paused
+        sim.u_in, sim.nu, sim.steps_per_frame, sim.paused, sim.turbulence = self.u_in, self.nu, self.steps_per_frame, self.paused, self.turbulence
         sim.dye_on, sim.send_p, sim.selected = self.dye_on, self.send_p, self.selected
         sim.bodies = [b.scaled(k) for b in self.bodies]
         sim.undo_stack = [[b.scaled(k) for b in snap] for snap in self.undo_stack]
@@ -247,8 +290,8 @@ _OPPi = OPP.astype(np.int64)
 _MIRi = np.array([0, 1, 4, 3, 2, 8, 7, 6, 5], dtype=np.int64)
 
 @njit(parallel=True, fastmath=True, cache=True)
-def _kernel(fin, fout, solid, tau0, u_in, cs, sponge, rho_o, ux_o, uy_o, force):
-    """Pull-streaming + half-way bounce-back + BGK/Smagorinsky, jedna pętla po siatce."""
+def _kernel(fin, fout, solid, tau0, u_in, inlet_u, inlet_v, cs, sponge, sponge_row, rho_o, ux_o, uy_o, force):
+    """Pull-streaming + half-way bounce-back + regularyzowana kolizja BGK/Smagorinsky w jednym przejściu."""
     _, ny, nx = fin.shape
     fxs = np.zeros(ny)
     fys = np.zeros(ny)
@@ -266,11 +309,11 @@ def _kernel(fin, fout, solid, tau0, u_in, cs, sponge, rho_o, ux_o, uy_o, force):
                 r = np.float32(0.0)
                 for i in range(9):
                     r += fin[i, y, 1]
-                u = u_in
-                v = np.float32(0.0)
-                usq = 1.5 * u * u
+                u = inlet_u[y]
+                v = inlet_v[y]
+                usq = 1.5 * (u * u + v * v)
                 for i in range(9):
-                    cu = 3.0 * _CXi[i] * u
+                    cu = 3.0 * (_CXi[i] * u + _CYi[i] * v)
                     fout[i, y, x] = _W32[i] * r * (1.0 + cu + 0.5 * cu * cu - usq)
                 rho_o[y, x] = r
                 ux_o[y, x] = u
@@ -282,8 +325,9 @@ def _kernel(fin, fout, solid, tau0, u_in, cs, sponge, rho_o, ux_o, uy_o, force):
                 if sx >= nx:
                     sx = nx - 1
                 if sy < 0 or sy >= ny:
-                    # ściana poślizgowa (odbicie lustrzane) na górze i dole tunelu
-                    fl[i] = fin[_MIRi[i], y, sx]
+                    # zewnętrzna krawędź marginesu: napływa strumień swobodny (brak ścian)
+                    c0 = 3.0 * _CXi[i] * u_in
+                    fl[i] = _W32[i] * (1.0 + c0 + 0.5 * c0 * c0 - 1.5 * u_in * u_in)
                     continue
                 if solid[sy, sx]:
                     # half-way bounce-back: odbita populacja z tej komórki
@@ -325,15 +369,21 @@ def _kernel(fin, fout, solid, tau0, u_in, cs, sponge, rho_o, ux_o, uy_o, force):
             tau = 0.5 * (t0 + np.sqrt(t0 * t0 + 18.0 * cs * cs * q / r))
             om = 1.0 / tau
             usq = 1.5 * (u * u + v * v)
-            sg = 0.0
+            sg = sponge_row[y]
             if x > nx - sponge:
                 a = (x - (nx - sponge)) / sponge
-                sg = 0.25 * a * a
+                sg = max(sg, 0.25 * a * a)
             usq0 = 1.5 * u_in * u_in
+            # regularyzacja: część nierównowagowa odtworzona tylko z tensora naprężeń Π_neq,
+            # co usuwa pasożytnicze mody wyższego rzędu (prążki / szachownica przy niskiej lepkości)
+            keep = 1.0 - om
             for i in range(9):
-                cu = 3.0 * (_CXi[i] * u + _CYi[i] * v)
+                cx = _CXi[i]
+                cy = _CYi[i]
+                cu = 3.0 * (cx * u + cy * v)
                 feq = _W32[i] * r * (1.0 + cu + 0.5 * cu * cu - usq)
-                post = fl[i] + om * (feq - fl[i])
+                fneq = _W32[i] * 4.5 * ((cx * cx - 1.0 / 3.0) * pxx + (cy * cy - 1.0 / 3.0) * pyy + 2.0 * cx * cy * pxy)
+                post = feq + keep * fneq
                 if sg > 0.0:
                     c0 = 3.0 * _CXi[i] * u_in
                     f0 = _W32[i] * (1.0 + c0 + 0.5 * c0 * c0 - usq0)
