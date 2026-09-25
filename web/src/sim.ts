@@ -2,7 +2,7 @@
 
 export const U_SCALE = 0.3 / 32767;
 export const P_SCALE = 0.02 / 32767;
-const HEADER = 44;
+const HEADER = 48;
 
 export interface Frame {
   nx: number;
@@ -18,8 +18,11 @@ export interface Frame {
   nu: number;
   ux: Int16Array;
   uy: Int16Array;
-  p: Int16Array;
+  p: Int16Array | null;
+  dye: Uint8Array | null;
   solid: Uint8Array;
+  canUndo: boolean;
+  canRedo: boolean;
 }
 
 export function decode(buf: ArrayBuffer): Frame | null {
@@ -28,15 +31,22 @@ export function decode(buf: ArrayBuffer): Frame | null {
   const nx = dv.getUint16(4, true);
   const ny = dv.getUint16(6, true);
   const n = nx * ny;
-  const f = (i: number) => dv.getFloat32(12 + i * 4, true);
+  const flags = dv.getUint32(12, true);
+  const f = (i: number) => dv.getFloat32(16 + i * 4, true);
+  let off = HEADER;
+  const ux = new Int16Array(buf, off, n); off += 2 * n;
+  const uy = new Int16Array(buf, off, n); off += 2 * n;
+  let p: Int16Array | null = null, dye: Uint8Array | null = null;
+  if (flags & 1) { p = new Int16Array(buf, off, n); off += 2 * n; }
+  if (flags & 2) { dye = new Uint8Array(buf, off, n); off += n; }
   return {
     nx, ny,
     step: dv.getUint32(8, true),
     cd: f(0), cl: f(1), re: f(2), u: f(3), fps: f(4), mlups: f(5), length: f(6), nu: f(7),
-    ux: new Int16Array(buf, HEADER, n),
-    uy: new Int16Array(buf, HEADER + 2 * n, n),
-    p: new Int16Array(buf, HEADER + 4 * n, n),
-    solid: unpackBits(new Uint8Array(buf, HEADER + 6 * n), n),
+    ux, uy, p, dye,
+    solid: unpackBits(new Uint8Array(buf, off), n),
+    canUndo: !!(flags & 4),
+    canRedo: !!(flags & 8),
   };
 }
 
@@ -46,12 +56,45 @@ function unpackBits(bits: Uint8Array, n: number) {
   return out;
 }
 
+export interface BodyInfo {
+  id: number;
+  kind: "airfoil" | "polygon" | "circle" | "rect" | "paint";
+  label: string;
+  x: number;
+  y: number;
+  angle: number;
+  bbox: [number, number, number, number];
+  r?: number;
+  outline?: [number, number][];
+  naca?: string;
+  t?: number;
+  m?: number;
+  chord?: number;
+}
+
+export interface Bodies {
+  nx: number;
+  ny: number;
+  list: BodyInfo[];
+  selected: number | null;
+  labels: Uint8Array;
+}
+
+function decodeBodies(buf: ArrayBuffer): Bodies | null {
+  const dv = new DataView(buf);
+  if (buf.byteLength < 12 || String.fromCharCode(dv.getUint8(0), dv.getUint8(1), dv.getUint8(2), dv.getUint8(3)) !== "BODS") return null;
+  const nx = dv.getUint16(4, true), ny = dv.getUint16(6, true), len = dv.getUint32(8, true);
+  const meta = JSON.parse(new TextDecoder().decode(new Uint8Array(buf, 12, len)));
+  return { nx, ny, list: meta.bodies, selected: meta.selected, labels: new Uint8Array(buf, 12 + len, nx * ny) };
+}
+
 export type Cmd = Record<string, unknown> & { type: string };
 
 export class SimSocket {
   private ws?: WebSocket;
   private closed = false;
   onFrame: (f: Frame) => void = () => {};
+  onBodies: (b: Bodies) => void = () => {};
   onStatus: (s: "connecting" | "open" | "closed") => void = () => {};
 
   connect() {
@@ -61,7 +104,10 @@ export class SimSocket {
     ws.binaryType = "arraybuffer";
     ws.onopen = () => this.onStatus("open");
     ws.onmessage = (e) => {
-      const fr = decode(e.data as ArrayBuffer);
+      const buf = e.data as ArrayBuffer;
+      const b = decodeBodies(buf);
+      if (b) { this.onBodies(b); return; }
+      const fr = decode(buf);
       if (fr) this.onFrame(fr);
     };
     ws.onclose = () => {

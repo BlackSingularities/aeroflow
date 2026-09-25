@@ -2,8 +2,8 @@
 import { Frame, P_SCALE, U_SCALE } from "./sim";
 
 export type Palette = "ocean" | "arctic" | "abyss";
-export type ViewMode = "speed" | "vorticity" | "pressure" | "none";
-export type ParticleMode = "off" | "tracers" | "smoke";
+export type ViewMode = "speed" | "vorticity" | "pressure" | "smoke" | "none";
+export type ParticleMode = "off" | "tracers" | "smoke" | "streamlines";
 
 function lut(stops: [number, string][]): Uint8Array {
   const out = new Uint8Array(256 * 3);
@@ -26,6 +26,7 @@ function lut(stops: [number, string][]): Uint8Array {
 export const LUTS = {
   arctic: lut([[0, "#0b1220"], [0.35, "#1b3b6f"], [0.6, "#6aa9e9"], [0.85, "#dbeeff"], [1, "#ffffff"]]),
   abyss: lut([[0, "#000000"], [0.4, "#00334d"], [0.7, "#00a3cc"], [0.9, "#7ff7ff"], [1, "#ffffff"]]),
+  dye: lut([[0, "#030a1c"], [0.25, "#0b2553"], [0.55, "#2a7fd4"], [0.8, "#a5e4ff"], [1, "#ffffff"]]),
   ocean: lut([[0, "#020617"], [0.25, "#0a2a5e"], [0.5, "#1463c7"], [0.72, "#3fb8f5"], [0.9, "#a8ecff"], [1, "#f4fdff"]]),
   diverging: lut([[0, "#7dd3fc"], [0.2, "#1d6fd8"], [0.45, "#08122c"], [0.5, "#050b1c"], [0.55, "#2a0f2e"], [0.8, "#e0487a"], [1, "#ffd1a6"]]),
   pressure: lut([[0, "#1e3a8a"], [0.3, "#2f7ff0"], [0.5, "#0b1430"], [0.7, "#f59e0b"], [1, "#fff4c2"]]),
@@ -46,7 +47,7 @@ export class FieldRenderer {
       this.img = this.ctx.createImageData(nx, ny);
     }
     const d = this.img.data;
-    const L = mode === "speed" ? LUTS[palette] : mode === "vorticity" ? LUTS.diverging : LUTS.pressure;
+    const L = mode === "speed" ? LUTS[palette] : mode === "vorticity" ? LUTS.diverging : mode === "smoke" ? LUTS.dye : LUTS.pressure;
     const ref = Math.max(fr.u, 0.02);
     for (let y = 0; y < ny; y++) {
       for (let x = 0; x < nx; x++) {
@@ -65,8 +66,12 @@ export class FieldRenderer {
           const ym = y > 0 ? i - nx : i, yp = y < ny - 1 ? i + nx : i;
           const w = ((uy[xp] - uy[xm]) - (ux[yp] - ux[ym])) * 0.5 * U_SCALE;
           t = 0.5 + 0.5 * Math.tanh((w / ref) * 1.4 * gain);
-        } else if (mode === "pressure") {
+        } else if (mode === "pressure" && p) {
           t = 0.5 + 0.5 * Math.tanh(((p[i] * P_SCALE) / (ref * ref)) * 1.2 * gain);
+        } else if (mode === "smoke" && fr.dye) {
+          // dym + delikatne tło prędkości, żeby było widać, gdzie płynie powietrze
+          const u = ux[i] * U_SCALE, v = uy[i] * U_SCALE;
+          t = Math.min(1, (fr.dye[i] / 255) * gain * 0.95 + Math.sqrt(u * u + v * v) / ref * 0.12);
         } else {
           t = 0.04;
         }
@@ -142,6 +147,39 @@ export class Particles {
         this.ys[i] = y;
       }
     }
+  }
+
+  /** Linie prądu: całkowanie RK2 z punktów startowych na wlocie (chwilowe pole prędkości). */
+  static streamlines(ctx: CanvasRenderingContext2D, fr: Frame, sx: number, sy: number, count: number, dpr: number) {
+    const { nx, ny, ux, uy, solid } = fr;
+    const sample = (a: Int16Array, x: number, y: number) => {
+      const x0 = Math.min(nx - 2, Math.max(0, x | 0)), y0 = Math.min(ny - 2, Math.max(0, y | 0));
+      const fx = x - x0, fy = y - y0, i = y0 * nx + x0;
+      return (a[i] * (1 - fx) + a[i + 1] * fx) * (1 - fy) + (a[i + nx] * (1 - fx) + a[i + nx + 1] * fx) * fy;
+    };
+    ctx.lineWidth = 1.1 * dpr;
+    ctx.lineJoin = "round";
+    ctx.strokeStyle = "rgba(225,245,255,0.7)";
+    ctx.beginPath();
+    const h = 0.9;
+    const maxSteps = nx * 3;
+    for (let k = 0; k < count; k++) {
+      let x = 1.5, y = ((k + 0.5) / count) * ny;
+      ctx.moveTo(x * sx, y * sy);
+      for (let s = 0; s < maxSteps; s++) {
+        let u = sample(ux, x, y), v = sample(uy, x, y);
+        let m = Math.hypot(u, v);
+        if (m < 1) break;
+        const mx = x + (u / m) * h * 0.5, my = y + (v / m) * h * 0.5;
+        u = sample(ux, mx, my); v = sample(uy, mx, my); m = Math.hypot(u, v);
+        if (m < 1) break;
+        x += (u / m) * h; y += (v / m) * h;
+        if (x < 0 || x >= nx - 1 || y < 0 || y >= ny - 1 || solid[(y | 0) * nx + (x | 0)]) break;
+        if (s % 3 === 0) ctx.lineTo(x * sx, y * sy);
+      }
+      ctx.lineTo(x * sx, y * sy);
+    }
+    ctx.stroke();
   }
 
   draw(ctx: CanvasRenderingContext2D, sx: number, sy: number, mode: ParticleMode) {

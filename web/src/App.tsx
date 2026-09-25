@@ -1,19 +1,21 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { FieldRenderer, Palette, ParticleMode, Particles, SolidLayer, ViewMode } from "./render";
-import { Frame, SimSocket, U_SCALE, P_SCALE, nacaPolygon } from "./sim";
+import { Bodies, BodyInfo, Frame, SimSocket, U_SCALE, P_SCALE, nacaPolygon } from "./sim";
+import { ContextMenu } from "./ContextMenu";
 import { Icon } from "./icons";
 import { DockButton, FloatingWindow, Segmented, Slider, Toggle } from "./ui";
 
-type Tool = "brush" | "erase" | "airfoil" | "polygon" | "circle" | "rect";
+type Tool = "select" | "brush" | "erase" | "airfoil" | "polygon" | "circle" | "rect";
 type Pt = [number, number];
 
 const TOOLS: { id: Tool; label: string; key: string; hint: string }[] = [
-  { id: "airfoil", label: "Skrzydło", key: "1", hint: "Przeciągnij od noska do krawędzi spływu — długość to cięciwa, kierunek to kąt natarcia" },
-  { id: "polygon", label: "Kształt", key: "2", hint: "Narysuj obrys — po puszczeniu zostanie wypełniony" },
-  { id: "brush", label: "Pędzel", key: "3", hint: "Maluj ściany · prawy przycisk wymazuje" },
-  { id: "circle", label: "Koło", key: "4", hint: "Przeciągnij od środka, aby ustawić promień" },
-  { id: "rect", label: "Prostokąt", key: "5", hint: "Przeciągnij po przekątnej" },
-  { id: "erase", label: "Gumka", key: "6", hint: "Usuwaj przeszkody" },
+  { id: "select", label: "Zaznacz", key: "1", hint: "Przeciągnij obiekt, aby go przesunąć · kółko myszy obraca · prawy przycisk: opcje · Del usuwa" },
+  { id: "airfoil", label: "Skrzydło", key: "2", hint: "Przeciągnij od noska do krawędzi spływu — długość to cięciwa, kierunek to kąt natarcia" },
+  { id: "polygon", label: "Kształt", key: "3", hint: "Narysuj obrys — po puszczeniu zostanie wypełniony" },
+  { id: "brush", label: "Pędzel", key: "4", hint: "Maluj ściany · prawy przycisk na pustym polu wymazuje" },
+  { id: "circle", label: "Koło", key: "5", hint: "Przeciągnij od środka, aby ustawić promień" },
+  { id: "rect", label: "Prostokąt", key: "6", hint: "Przeciągnij po przekątnej" },
+  { id: "erase", label: "Gumka", key: "7", hint: "Wymazuj fragmenty przeszkód" },
 ];
 
 const PRESETS: { id: string; label: string; thumb: JSX.Element }[] = [
@@ -30,15 +32,23 @@ const VIEWS: { id: ViewMode; label: string; icon: string }[] = [
   { id: "speed", label: "Prędkość", icon: "speed" },
   { id: "vorticity", label: "Wirowość", icon: "vorticity" },
   { id: "pressure", label: "Ciśnienie", icon: "pressure" },
+  { id: "smoke", label: "Dym", icon: "smoke" },
   { id: "none", label: "Brak", icon: "none" },
 ];
 
-const RESOLUTIONS = [{ id: "140", label: "Niska" }, { id: "200", label: "Średnia" }, { id: "260", label: "Wysoka" }, { id: "320", label: "Ultra" }];
+const RESOLUTIONS = [{ id: "200", label: "Średnia" }, { id: "280", label: "Wysoka" }, { id: "360", label: "Ultra" }, { id: "440", label: "Maks." }];
+const PMODES: { id: ParticleMode; label: string; icon: string }[] = [
+  { id: "tracers", label: "Cząstki", icon: "particles" },
+  { id: "streamlines", label: "Linie prądu", icon: "streamlines" },
+  { id: "smoke", label: "Smugi", icon: "smoke" },
+  { id: "off", label: "Wył.", icon: "none" },
+];
+const nextPmode = (m: ParticleMode) => PMODES[(PMODES.findIndex((x) => x.id === m) + 1) % PMODES.length].id;
 
 const nuFromSlider = (s: number) => 0.001 * Math.pow(0.06 / 0.001, s);
 const sliderFromNu = (nu: number) => Math.log(nu / 0.001) / Math.log(0.06 / 0.001);
 
-interface Stats { cd: number; cl: number; re: number; fps: number; mlups: number; step: number; length: number; nx: number; ny: number }
+interface Stats { canUndo: boolean; canRedo: boolean; cd: number; cl: number; re: number; fps: number; mlups: number; step: number; length: number; nx: number; ny: number }
 
 function usePersist<T>(key: string, init: T) {
   const [v, setV] = useState<T>(() => {
@@ -59,7 +69,8 @@ export default function App() {
   const [u, setU] = useState(0.1);
   const [nuS, setNuS] = useState(sliderFromNu(0.008));
   const [steps, setSteps] = usePersist("steps", 10);
-  const [res, setRes] = usePersist("res", "200");
+  const [res, setRes] = usePersist("res2", "280");
+  const [arrows, setArrows] = usePersist("arrows", true);
   const [gain, setGain] = usePersist("gain", 1);
   const [paused, setPaused] = useState(false);
   const [thick, setThick] = useState(12);
@@ -74,6 +85,8 @@ export default function App() {
   const [presetsOpen, setPresetsOpen] = useState(false);
   const [zen, setZen] = useState(false);
   const [toast, setToast] = useState<{ text: string; id: number } | null>(null);
+  const [bodies, setBodies] = useState<Bodies | null>(null);
+  const [menu, setMenu] = useState<{ id: number; x: number; y: number } | null>(null);
 
   const sock = useRef<SimSocket>();
   const frame = useRef<Frame | null>(null);
@@ -85,10 +98,14 @@ export default function App() {
   const solids = useRef(new SolidLayer());
   const trail = useRef(document.createElement("canvas"));
   const history = useRef<{ cd: number; cl: number }[]>([]);
-  const drag = useRef<{ start: Pt; pts: Pt[]; cur: Pt; erase: boolean; pending: Pt[] } | null>(null);
+  const drag = useRef<{ start: Pt; pts: Pt[]; cur: Pt; erase: boolean; pending: Pt[]; sent?: boolean } | null>(null);
   const hover = useRef<{ g: Pt; sx: number; sy: number } | null>(null);
-  const cfg = useRef({ view, pmode, pcount, gain, tool, brush, thick, camber, steps, palette, trailLen });
-  cfg.current = { view, pmode, pcount, gain, tool, brush, thick, camber, steps, palette, trailLen };
+  const bodiesRef = useRef<Bodies | null>(null);
+  const hoverBody = useRef<number | null>(null);
+  const moving = useRef<{ last: Pt; acc: Pt } | null>(null);
+  const wheelAt = useRef(0);
+  const cfg = useRef({ view, pmode, pcount, gain, tool, brush, thick, camber, steps, palette, trailLen, arrows, menuId: menu?.id ?? null });
+  cfg.current = { view, pmode, pcount, gain, tool, brush, thick, camber, steps, palette, trailLen, arrows, menuId: menu?.id ?? null };
 
   const send = useCallback((c: { type: string } & Record<string, unknown>) => sock.current?.send(c), []);
   const notify = useCallback((text: string) => setToast({ text, id: Date.now() }), []);
@@ -103,6 +120,7 @@ export default function App() {
     const s = new SimSocket();
     s.onStatus = setStatus;
     s.onFrame = (f) => { frame.current = f; fresh.current = true; };
+    s.onBodies = (b) => { bodiesRef.current = b; setBodies(b); };
     s.connect();
     sock.current = s;
     return () => s.close();
@@ -121,13 +139,20 @@ export default function App() {
   }, [res, send, status]);
 
   useEffect(() => send({ type: "params", u, nu: nuFromSlider(nuS), steps, paused }), [u, nuS, steps, paused, send, status]);
+  // serwer liczy i wysyła tylko pola, które są faktycznie potrzebne
+  useEffect(() => {
+    const fields: string[] = [];
+    if (view === "pressure" || probeOn) fields.push("p");
+    if (view === "smoke") fields.push("dye");
+    send({ type: "params", fields });
+  }, [view, probeOn, send, status]);
 
   // ---- statystyki (5 Hz) + wykres + sonda
   useEffect(() => {
     const id = setInterval(() => {
       const f = frame.current;
       if (!f) return;
-      setStats({ cd: f.cd, cl: f.cl, re: f.re, fps: f.fps, mlups: f.mlups, step: f.step, length: f.length, nx: f.nx, ny: f.ny });
+      setStats({ canUndo: f.canUndo, canRedo: f.canRedo, cd: f.cd, cl: f.cl, re: f.re, fps: f.fps, mlups: f.mlups, step: f.step, length: f.length, nx: f.nx, ny: f.ny });
       const h = history.current;
       if (f.length > 0 && !paused) {
         h.push({ cd: f.cd, cl: f.cl });
@@ -140,8 +165,8 @@ export default function App() {
         if (x >= 0 && y >= 0 && x < f.nx && y < f.ny) {
           const i = y * f.nx + x;
           const sp = (Math.hypot(f.ux[i], f.uy[i]) * U_SCALE) / Math.max(f.u, 1e-6);
-          const cp = (f.p[i] * P_SCALE) / (0.5 * f.u * f.u);
-          setProbe({ sx: hv.sx, sy: hv.sy, text: f.solid[i] ? "ciało stałe" : `|u|/U∞ ${sp.toFixed(2)}   Cp ${cp >= 0 ? "+" : ""}${cp.toFixed(2)}` });
+          const cp = f.p ? (f.p[i] * P_SCALE) / (0.5 * f.u * f.u) : NaN;
+          setProbe({ sx: hv.sx, sy: hv.sy, text: f.solid[i] ? "ciało stałe" : `|u|/U∞ ${sp.toFixed(2)}` + (Number.isFinite(cp) ? `   Cp ${cp >= 0 ? "+" : ""}${cp.toFixed(2)}` : "") });
         }
       } else setProbe(null);
     }, 200);
@@ -167,14 +192,17 @@ export default function App() {
 
       const key = `${c.pcount}|${c.pmode}|${f.nx}x${f.ny}`;
       if (key !== lastKey) {
-        parts.current.resize(c.pmode === "off" ? 0 : c.pcount, f, c.pmode);
+        parts.current.resize(c.pmode === "off" || c.pmode === "streamlines" ? 0 : c.pcount, f, c.pmode);
         tctx.clearRect(0, 0, W, H);
         lastKey = key;
       }
       if (fresh.current) {
         fresh.current = false;
         field.current.draw(f, c.view, c.gain, c.palette);
-        if (c.pmode !== "off") {
+        if (c.pmode === "streamlines") {
+          tctx.clearRect(0, 0, W, H);
+          Particles.streamlines(tctx, f, sx, sy, Math.round(Math.min(140, Math.max(24, c.pcount / 80))), dpr);
+        } else if (c.pmode !== "off") {
           parts.current.step(f, c.pmode, c.steps);
           tctx.globalCompositeOperation = "destination-out";
           const fade = (c.pmode === "smoke" ? 0.1 : 0.3) * (1.05 - c.trailLen);
@@ -190,11 +218,49 @@ export default function App() {
       if (c.pmode !== "off") ctx.drawImage(tr, 0, 0);
       solids.current.update(f, W, H);
       ctx.drawImage(solids.current.canvas, 0, 0);
+      if (c.arrows) drawForces(ctx, f, sx, sy, dpr);
       drawOverlay(ctx, sx, sy, dpr, c);
     };
     raf = requestAnimationFrame(loop);
     return () => cancelAnimationFrame(raf);
   }, []);
+
+  const centroid = useRef({ key: "", x: 0, y: 0, n: 0 });
+  function drawForces(ctx: CanvasRenderingContext2D, f: Frame, sx: number, sy: number, dpr: number) {
+    if (!f.length) return;
+    // środek ciężkości ciał liczony tylko przy zmianie geometrii
+    const key = `${f.nx}x${f.ny}:${f.length}:${f.canUndo}:${f.canRedo}`;
+    if (centroid.current.key !== key) {
+      let X = 0, Y = 0, n = 0;
+      for (let y = 0; y < f.ny; y++) for (let x = 0; x < f.nx; x++) if (f.solid[y * f.nx + x]) { X += x; Y += y; n++; }
+      centroid.current = { key, x: n ? X / n : 0, y: n ? Y / n : 0, n };
+    }
+    const { x, y, n } = centroid.current;
+    if (!n) return;
+    const cx = x * sx, cy = y * sy;
+    const k = 60 * dpr;
+    const arrow = (dx: number, dy: number, color: string, label: string) => {
+      const len = Math.hypot(dx, dy);
+      if (len < 4 * dpr) return;
+      const ex = cx + dx, ey = cy + dy, ux = dx / len, uy = dy / len, hs = 9 * dpr;
+      ctx.strokeStyle = color; ctx.fillStyle = color; ctx.lineWidth = 2.5 * dpr;
+      ctx.shadowColor = color; ctx.shadowBlur = 10 * dpr;
+      ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(ex - ux * hs * 0.6, ey - uy * hs * 0.6); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(ex, ey);
+      ctx.lineTo(ex - ux * hs - uy * hs * 0.55, ey - uy * hs + ux * hs * 0.55);
+      ctx.lineTo(ex - ux * hs + uy * hs * 0.55, ey - uy * hs - ux * hs * 0.55);
+      ctx.closePath(); ctx.fill();
+      ctx.shadowBlur = 0;
+      ctx.font = `600 ${11 * dpr}px 'IBM Plex Mono'`;
+      ctx.fillText(label, ex + ux * 8 * dpr + 4 * dpr, ey + uy * 8 * dpr + 4 * dpr);
+    };
+    const clamp = (v: number) => Math.max(-3, Math.min(3, v));
+    ctx.save();
+    arrow(clamp(f.cd) * k, 0, "#f5a524", "D");
+    arrow(0, -clamp(f.cl) * k, "#38bdf8", "L");
+    ctx.beginPath(); ctx.arc(cx, cy, 3.5 * dpr, 0, Math.PI * 2); ctx.fillStyle = "#fff"; ctx.fill();
+    ctx.restore();
+  }
 
   function drawOverlay(ctx: CanvasRenderingContext2D, sx: number, sy: number, dpr: number, c: typeof cfg.current) {
     const d = drag.current;
@@ -224,6 +290,45 @@ export default function App() {
         ctx.beginPath(); ctx.moveTo(x0 * sx, y0 * sy); ctx.lineTo(x1 * sx, y1 * sy); ctx.stroke();
       }
     }
+    // obrys zaznaczonego / najechanego obiektu
+    const bs = bodiesRef.current;
+    if (bs && bs.nx === frame.current?.nx) {
+      const outline = (b: BodyInfo, strong: boolean) => {
+        ctx.save();
+        ctx.setLineDash(strong ? [7 * dpr, 5 * dpr] : [3 * dpr, 4 * dpr]);
+        ctx.lineDashOffset = strong ? -performance.now() / 40 : 0;
+        ctx.lineWidth = (strong ? 1.8 : 1.2) * dpr;
+        ctx.strokeStyle = strong ? "rgba(125,211,252,1)" : "rgba(255,255,255,0.55)";
+        ctx.shadowColor = "rgba(56,189,248,0.8)";
+        ctx.shadowBlur = strong ? 8 * dpr : 0;
+        ctx.beginPath();
+        const pad = 2;
+        if (b.kind === "circle" && b.r) ctx.ellipse(b.x * sx, b.y * sy, (b.r + pad) * sx, (b.r + pad) * sy, 0, 0, Math.PI * 2);
+        else if (b.outline) {
+          b.outline.forEach(([x, y], i) => (i ? ctx.lineTo(x * sx, y * sy) : ctx.moveTo(x * sx, y * sy)));
+          ctx.closePath();
+        } else {
+          const [x0, y0, x1, y1] = b.bbox;
+          ctx.rect((x0 - pad) * sx, (y0 - pad) * sy, (x1 - x0 + 2 * pad) * sx, (y1 - y0 + 2 * pad) * sy);
+        }
+        ctx.stroke();
+        if (strong) {
+          ctx.setLineDash([]);
+          ctx.fillStyle = "#e0f6ff";
+          ctx.beginPath(); ctx.arc(b.x * sx, b.y * sy, 3.5 * dpr, 0, Math.PI * 2); ctx.fill();
+          if (b.kind !== "circle") {
+            ctx.font = `600 ${11 * dpr}px 'IBM Plex Mono'`;
+            ctx.shadowBlur = 0;
+            ctx.fillText(`${b.angle.toFixed(1)}°`, (b.bbox[2] + 4) * sx, (b.bbox[1]) * sy);
+          }
+        }
+        ctx.restore();
+      };
+      const sel = bs.list.find((b) => b.id === (c.menuId ?? bs.selected));
+      const hov = c.tool === "select" ? bs.list.find((b) => b.id === hoverBody.current) : undefined;
+      if (hov && hov !== sel) outline(hov, false);
+      if (sel && (c.tool === "select" || c.menuId)) outline(sel, true);
+    }
     const h = hover.current;
     if (h && (c.tool === "brush" || c.tool === "erase")) {
       ctx.setLineDash([]);
@@ -242,18 +347,47 @@ export default function App() {
     return [((e.clientX - r.left) / r.width) * f.nx, ((e.clientY - r.top) / r.height) * f.ny];
   };
 
+  const pickAt = (p: Pt): number | null => {
+    const b = bodiesRef.current;
+    if (!b) return null;
+    const x = Math.floor(p[0]), y = Math.floor(p[1]);
+    if (x < 0 || y < 0 || x >= b.nx || y >= b.ny) return null;
+    const k = b.labels[y * b.nx + x];
+    return k ? b.list[k - 1]?.id ?? null : null;
+  };
+
   const flushStroke = () => {
     const d = drag.current;
     if (!d || d.pending.length === 0) return;
-    send({ type: "stroke", points: d.pending, radius: brush, mode: tool === "erase" || d.erase ? "erase" : "wall" });
+    // tylko pierwszy fragment pociągnięcia tworzy punkt cofania
+    send({ type: "stroke", points: d.pending, radius: brush, mode: tool === "erase" || d.erase ? "erase" : "wall", continue: !!d.sent });
+    d.sent = true;
     d.pending = [d.pending[d.pending.length - 1]];
   };
 
   const onDown = (e: React.PointerEvent) => {
     if (!frame.current) return;
     setPresetsOpen(false);
-    e.currentTarget.setPointerCapture(e.pointerId);
     const p = toGrid(e);
+    const hit = pickAt(p);
+    // prawy przycisk na obiekcie → menu opcji
+    if (e.button === 2 && hit !== null) {
+      send({ type: "select", id: hit });
+      setMenu({ id: hit, x: e.clientX + 6, y: e.clientY + 6 });
+      return;
+    }
+    setMenu(null);
+    if (tool === "select" || (e.button === 0 && e.altKey)) {
+      if (hit !== null) {
+        e.currentTarget.setPointerCapture(e.pointerId);
+        send({ type: "grab", x: p[0], y: p[1] });
+        moving.current = { last: p, acc: [0, 0] };
+        (e.currentTarget as HTMLElement).style.cursor = "grabbing";
+      } else send({ type: "select", id: null });
+      return;
+    }
+    if (e.button === 2 && tool !== "brush" && tool !== "erase") return;
+    e.currentTarget.setPointerCapture(e.pointerId);
     drag.current = { start: p, pts: [p], cur: p, erase: e.button === 2, pending: [p] };
     if (tool === "brush" || tool === "erase") flushStroke();
   };
@@ -262,6 +396,21 @@ export default function App() {
     if (!frame.current) return;
     const p = toGrid(e);
     hover.current = { g: p, sx: e.clientX, sy: e.clientY };
+    const mv = moving.current;
+    if (mv) {
+      mv.acc = [mv.acc[0] + p[0] - mv.last[0], mv.acc[1] + p[1] - mv.last[1]];
+      mv.last = p;
+      if (Math.abs(mv.acc[0]) + Math.abs(mv.acc[1]) >= 0.5) {
+        send({ type: "drag", dx: mv.acc[0], dy: mv.acc[1] });
+        mv.acc = [0, 0];
+      }
+      return;
+    }
+    if (tool === "select") {
+      const hb = pickAt(p);
+      hoverBody.current = hb;
+      (e.currentTarget as HTMLElement).style.cursor = hb !== null ? "grab" : "default";
+    }
     const d = drag.current;
     if (!d) return;
     d.cur = p;
@@ -281,7 +430,15 @@ export default function App() {
     }
   };
 
-  const onUp = () => {
+  const onUp = (e?: React.PointerEvent) => {
+    if (moving.current) {
+      const mv = moving.current;
+      if (mv.acc[0] || mv.acc[1]) send({ type: "drag", dx: mv.acc[0], dy: mv.acc[1] });
+      send({ type: "release" });
+      moving.current = null;
+      if (e) (e.currentTarget as HTMLElement).style.cursor = "grab";
+      return;
+    }
     const d = drag.current;
     if (!d) return;
     const [x0, y0] = d.start, [x1, y1] = d.cur;
@@ -301,6 +458,17 @@ export default function App() {
     setGhost(null);
   };
 
+  // kółko myszy obraca obiekt pod kursorem (lub zaznaczony)
+  const onWheel = (e: React.WheelEvent) => {
+    if (tool !== "select" && !menu) return;
+    const target = hoverBody.current ?? bodiesRef.current?.selected ?? null;
+    if (target === null) return;
+    const now = performance.now();
+    const step = (e.shiftKey ? 0.5 : 2) * Math.sign(e.deltaY);
+    send({ type: now - wheelAt.current > 600 ? "rotate_begin" : "rotate", id: target, delta: step });
+    wheelAt.current = now;
+  };
+
   const resetFlow = useCallback(() => { send({ type: "reset" }); history.current = []; notify("Przepływ zresetowany"); }, [send, notify]);
   const clearAll = useCallback(() => { send({ type: "clear" }); history.current = []; notify("Usunięto przeszkody"); }, [send, notify]);
   const loadPreset = (id: string, label: string) => {
@@ -309,6 +477,19 @@ export default function App() {
     setPresetsOpen(false);
     notify(label);
   };
+  const undo = useCallback(() => { send({ type: "undo" }); notify("Cofnięto"); }, [send, notify]);
+  const redo = useCallback(() => { send({ type: "redo" }); notify("Ponowiono"); }, [send, notify]);
+  const screenshot = useCallback(() => {
+    canvasRef.current?.toBlob((b) => {
+      if (!b) return;
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(b);
+      a.download = `aeroflow-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-")}.png`;
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+      notify("Zapisano zrzut ekranu");
+    });
+  }, [notify]);
   const toggleFullscreen = () => {
     if (document.fullscreenElement) document.exitFullscreen();
     else document.documentElement.requestFullscreen?.();
@@ -318,12 +499,29 @@ export default function App() {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if ((e.target as HTMLElement).tagName === "INPUT") return;
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "z") { e.preventDefault(); (e.shiftKey ? redo : undo)(); return; }
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "y") { e.preventDefault(); redo(); return; }
+      const sel = bodiesRef.current?.selected ?? null;
+      if (sel !== null) {
+        if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "d") { e.preventDefault(); send({ type: "duplicate", id: sel }); return; }
+        if (e.key === "Delete" || e.key === "Backspace") { send({ type: "delete", id: sel }); setMenu(null); notify("Usunięto obiekt"); return; }
+        const arrows: Record<string, Pt> = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] };
+        if (arrows[e.key]) {
+          e.preventDefault();
+          const k = e.shiftKey ? 5 : 1;
+          send({ type: "nudge", id: sel, dx: arrows[e.key][0] * k, dy: arrows[e.key][1] * k, continue: e.repeat });
+          return;
+        }
+      }
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
       const t = TOOLS.find((t) => t.key === e.key);
       if (t) { setTool(t.id); return; }
       switch (e.key.toLowerCase()) {
         case " ": e.preventDefault(); setPaused((p) => !p); break;
         case "v": setView((v) => VIEWS[(VIEWS.findIndex((x) => x.id === v) + 1) % VIEWS.length].id); break;
-        case "p": setPmode((m) => (m === "tracers" ? "smoke" : m === "smoke" ? "off" : "tracers")); break;
+        case "p": setPmode(nextPmode); break;
+        case "a": setArrows((v) => !v); break;
+        case "k": screenshot(); break;
         case "c": clearAll(); break;
         case "r": resetFlow(); break;
         case "s": setWin((w) => ({ ...w, settings: !w.settings })); break;
@@ -331,12 +529,12 @@ export default function App() {
         case "h": setZen((z) => !z); break;
         case "f": toggleFullscreen(); break;
         case "?": case "/": setWin((w) => ({ ...w, help: !w.help })); break;
-        case "escape": setWin({ settings: false, chart: false, help: false }); setPresetsOpen(false); break;
+        case "escape": setWin({ settings: false, chart: false, help: false }); setPresetsOpen(false); setMenu(null); send({ type: "select", id: null }); break;
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [clearAll, resetFlow, setView, setPmode]);
+  }, [clearAll, resetFlow, setView, setPmode, setArrows, undo, redo, screenshot, send, notify]);
 
   const ld = stats && Math.abs(stats.cd) > 1e-3 ? stats.cl / stats.cd : 0;
   const hasBody = !!stats?.length;
@@ -352,6 +550,7 @@ export default function App() {
         onPointerMove={onMove}
         onPointerUp={onUp}
         onPointerCancel={onUp}
+        onWheel={onWheel}
         onPointerLeave={() => { hover.current = null; setProbe(null); }}
         onContextMenu={(e) => e.preventDefault()}
       />
@@ -359,10 +558,8 @@ export default function App() {
 
       <div className="hud brand ui">
         <div className="logo"><Icon name="logo" /></div>
-        <div className="brand-text">
-          <b>AeroFlow</b>
-          <span className={`conn ${status}`}><i />{status === "open" ? (paused ? "wstrzymano" : "na żywo") : status === "connecting" ? "łączenie…" : "offline"}</span>
-        </div>
+        <b className="brand-name">AeroFlow</b>
+        {paused && <span className="paused-tag">pauza</span>}
       </div>
 
       <div className="hud kpis ui" onClick={() => setWin((w) => ({ ...w, chart: !w.chart }))} title="Pokaż wykres sił (G)">
@@ -383,6 +580,8 @@ export default function App() {
           <DockButton key={t.id} icon={t.id} label={t.label} kbd={t.key} active={tool === t.id} onClick={() => setTool(t.id)} tipSide="right" />
         ))}
         <div className="dock-sep" />
+        <DockButton icon="undo" label="Cofnij" kbd="Ctrl+Z" onClick={undo} disabled={!stats?.canUndo} tipSide="right" />
+        <DockButton icon="redo" label="Ponów" kbd="Ctrl+Y" onClick={redo} disabled={!stats?.canRedo} tipSide="right" />
         <DockButton icon="trash" label="Wyczyść wszystko" kbd="C" onClick={clearAll} tipSide="right" />
       </nav>
 
@@ -415,13 +614,15 @@ export default function App() {
           <div className="dock-sep v" />
           <Segmented options={VIEWS.map((v) => ({ ...v, label: "", title: `${v.label} (V)` }))} value={view} onChange={setView} small />
           <div className="dock-sep v" />
-          <DockButton icon={pmode === "smoke" ? "smoke" : "particles"} label={pmode === "off" ? "Cząstki: wył." : pmode === "smoke" ? "Smugi dymu" : "Cząstki"} kbd="P"
-            active={pmode !== "off"} onClick={() => setPmode((m) => (m === "tracers" ? "smoke" : m === "smoke" ? "off" : "tracers"))} />
+          <DockButton icon={PMODES.find((m) => m.id === pmode)!.icon} label={`Znaczniki: ${PMODES.find((m) => m.id === pmode)!.label}`} kbd="P"
+            active={pmode !== "off"} onClick={() => setPmode(nextPmode)} />
+          <DockButton icon="arrows" label="Wektory sił" kbd="A" active={arrows} onClick={() => setArrows((v) => !v)} />
           <DockButton icon="layers" label="Scenariusze" active={presetsOpen} onClick={() => setPresetsOpen((o) => !o)} />
           <DockButton icon="chart" label="Wykres sił" kbd="G" active={win.chart} onClick={() => setWin((w) => ({ ...w, chart: !w.chart }))} />
           <DockButton icon="gear" label="Ustawienia" kbd="S" active={win.settings} onClick={() => setWin((w) => ({ ...w, settings: !w.settings }))} />
           <div className="dock-sep v" />
           <DockButton icon="help" label="Skróty" kbd="?" active={win.help} onClick={() => setWin((w) => ({ ...w, help: !w.help }))} />
+          <DockButton icon="camera" label="Zrzut ekranu" kbd="K" onClick={screenshot} />
           <DockButton icon="eyeoff" label="Ukryj interfejs" kbd="H" onClick={() => setZen(true)} />
           <DockButton icon="fullscreen" label="Pełny ekran" kbd="F" onClick={toggleFullscreen} />
         </div>
@@ -478,13 +679,18 @@ export default function App() {
                 )}
                 <Slider label="Kontrast" value={gain} min={0.3} max={3} step={0.05} onChange={setGain} display={`${gain.toFixed(2)}×`} />
                 <div className="field-label">Znaczniki</div>
-                <Segmented options={[{ id: "tracers", label: "Cząstki" }, { id: "smoke", label: "Smugi" }, { id: "off", label: "Wył." }]} value={pmode} onChange={setPmode} />
-                {pmode !== "off" && (
+                <Segmented options={PMODES.map((m) => ({ ...m, label: "", title: m.label }))} value={pmode} onChange={setPmode} />
+                <div className="seg-caption">{PMODES.find((m) => m.id === pmode)!.label}</div>
+                {pmode === "streamlines" && (
+                  <Slider label="Gęstość linii" value={pcount} min={500} max={15000} step={500} onChange={setPcount} display={String(Math.round(Math.min(140, Math.max(24, pcount / 80))))} />
+                )}
+                {(pmode === "tracers" || pmode === "smoke") && (
                   <>
                     <Slider label="Liczba" value={pcount} min={500} max={15000} step={500} onChange={setPcount} display={pcount.toLocaleString("pl")} />
                     <Slider label="Długość śladu" value={trailLen} min={0} max={1} step={0.05} onChange={setTrailLen} display={`${Math.round(trailLen * 100)}%`} />
                   </>
                 )}
+                <Toggle label="Wektory sił na ciele" value={arrows} onChange={setArrows} />
                 <Toggle label="Sonda pod kursorem" value={probeOn} onChange={setProbeOn} />
               </>
             )}
@@ -517,14 +723,18 @@ export default function App() {
         <FloatingWindow id="help" title="Skróty klawiszowe" icon="help" open={win.help} onClose={() => setWin((w) => ({ ...w, help: false }))}
           initial={{ x: window.innerWidth / 2 - 170, y: 110 }} width={340}>
           <div className="keys">
-            {[["1–6", "narzędzia"], ["Spacja", "pauza / wznów"], ["V", "następne pole"], ["P", "tryb znaczników"], ["R", "reset przepływu"], ["C", "wyczyść przeszkody"],
-              ["S", "ustawienia"], ["G", "wykres sił"], ["H", "ukryj interfejs"], ["F", "pełny ekran"], ["PPM", "wymazywanie pędzlem"], ["Esc", "zamknij okna"]].map(([k, d]) => (
+            {[["1–7", "narzędzia"], ["PPM", "opcje obiektu"], ["Del", "usuń zaznaczony"], ["Strzałki", "przesuń zaznaczony"], ["Kółko", "obróć obiekt"], ["Ctrl+D", "duplikuj"], ["Spacja", "pauza / wznów"], ["V", "następne pole"], ["P", "tryb znaczników"], ["R", "reset przepływu"], ["C", "wyczyść przeszkody"],
+              ["Ctrl+Z", "cofnij"], ["Ctrl+Y", "ponów"], ["A", "wektory sił"], ["K", "zrzut ekranu"],
+              ["S", "ustawienia"], ["G", "wykres sił"], ["H", "ukryj interfejs"], ["F", "pełny ekran"], ["Alt+LPM", "przesuń dowolnym narzędziem"], ["Esc", "zamknij / odznacz"]].map(([k, d]) => (
               <div key={k}><kbd>{k}</kbd><span>{d}</span></div>
             ))}
           </div>
         </FloatingWindow>
       </div>
 
+      {menu && bodies?.list.find((b) => b.id === menu.id) && (
+        <ContextMenu key={menu.id} body={bodies.list.find((b) => b.id === menu.id)!} x={menu.x} y={menu.y} send={send} onClose={() => setMenu(null)} />
+      )}
       {ghost && <div className="ghost">{ghost}</div>}
       {probe && <div className="probe" style={{ left: probe.sx + 16, top: probe.sy + 16 }}>{probe.text}</div>}
       {toast && <div className="toast" key={toast.id}>{toast.text}</div>}
@@ -614,13 +824,14 @@ const GRADS: Record<string, string> = {
   ocean: "linear-gradient(90deg,#020617,#0a2a5e,#1463c7,#3fb8f5,#a8ecff,#f4fdff)",
   arctic: "linear-gradient(90deg,#0b1220,#1b3b6f,#6aa9e9,#dbeeff,#fff)",
   abyss: "linear-gradient(90deg,#000,#00334d,#00a3cc,#7ff7ff,#fff)",
+  smoke: "linear-gradient(90deg,#030a1c,#0b2553,#2a7fd4,#a5e4ff,#fff)",
   vorticity: "linear-gradient(90deg,#7dd3fc,#1d6fd8,#08122c,#2a0f2e,#e0487a,#ffd1a6)",
   pressure: "linear-gradient(90deg,#1e3a8a,#2f7ff0,#0b1430,#f59e0b,#fff4c2)",
 };
 
 function Legend({ view, palette }: { view: ViewMode; palette: Palette }) {
   if (view === "none") return null;
-  const labels = { speed: ["0", "2 U∞"], vorticity: ["−ω", "+ω"], pressure: ["p−", "p+"] }[view];
+  const labels = { speed: ["0", "2 U∞"], vorticity: ["−ω", "+ω"], pressure: ["p−", "p+"], smoke: ["czyste", "dym"] }[view];
   return (
     <span className="legend">
       <em>{labels[0]}</em>

@@ -30,6 +30,15 @@ const PATHS: Record<string, JSX.Element> = {
   particles: <><circle cx="5" cy="8" r="1" /><circle cx="11" cy="6" r="1" /><circle cx="17" cy="9" r="1" /><circle cx="7" cy="15" r="1" /><circle cx="14" cy="14" r="1" /><circle cx="19" cy="17" r="1" /></>,
   smoke: <path d="M3 8c3 0 3 2 6 2s3-2 6-2 3 2 6 2M3 14c3 0 3 2 6 2s3-2 6-2 3 2 6 2" />,
   wind: <path d="M3 8h11a3 3 0 1 0-3-3M3 12h15a3 3 0 1 1-3 3M3 16h7" />,
+  camera: <><path d="M4 8h3l2-3h6l2 3h3v11H4z" /><circle cx="12" cy="13" r="3.5" /></>,
+  undo: <><path d="M9 14L4 9l5-5" /><path d="M4 9h10a6 6 0 0 1 0 12h-3" /></>,
+  redo: <><path d="M15 14l5-5-5-5" /><path d="M20 9H10a6 6 0 0 0 0 12h3" /></>,
+  arrows: <><path d="M5 19L19 5M19 5h-6M19 5v6" /><path d="M5 19h9" /></>,
+  streamlines: <path d="M3 6c6 0 8 3 18 3M3 12c6 0 8-2 18-2M3 18c6 0 8-4 18-4" />,
+  select: <path d="M5 3l14 8-6 1.5L10 19z" />,
+  copy: <><rect x="8" y="8" width="12" height="12" rx="2" /><path d="M16 8V5a1 1 0 0 0-1-1H5a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h3" /></>,
+  flip: <><path d="M3 12h18" strokeDasharray="2 2" /><path d="M7 9l5-5 5 5zM7 15l5 5 5-5z" /></>,
+  center: <><path d="M4 12h16" /><path d="M12 4v4M12 16v4M9 7l3-3 3 3M9 17l3 3 3-3" /></>,
   cpu: <><rect x="6" y="6" width="12" height="12" rx="2" /><path d="M9 2v4M15 2v4M9 18v4M15 18v4M2 9h4M2 15h4M18 9h4M18 15h4" /></>,
 };
 
