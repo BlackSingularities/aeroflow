@@ -1,6 +1,3 @@
-node_modules/
-web/dist/
-__pycache__/
-*.pyc
-.venv/
-*.tsbuildinfo
+/target/
+/dist/
+*.pdb
