@@ -6,7 +6,7 @@ name: Release
 # Ręczne uruchomienie (Actions → Release → Run workflow) pozwala podbić wersję minor/major.
 on:
   push:
-    branches: [main, "claude/vigilant-lamport-bp0h4s"]
+    branches: [main]
     paths:
       - "src/**"
       - "assets/**"
@@ -15,7 +15,6 @@ on:
       - "Cargo.toml"
       - "Cargo.lock"
       - "CHANGELOG.md"
-      - ".github/workflows/release.yml"
   workflow_dispatch:
     inputs:
       bump:
@@ -137,7 +136,6 @@ jobs:
 
   publish:
     needs: [version, windows, linux]
-    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     env:
       VERSION: ${{ needs.version.outputs.version }}
