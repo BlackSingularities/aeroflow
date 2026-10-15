@@ -171,7 +171,21 @@ impl App {
         for b in &self.scene.bodies {
             let sel = self.selected == Some(b.id);
             let hov = hovered_body == Some(b.id) && self.tool == Tool::Select;
-            if matches!(b.shape, Shape::Wall { .. }) {
+            if let Shape::Wall { strokes } = &b.shape {
+                // ściana bez gumki: gładki rysunek wektorowy (kapsuły); z gumką — raster z pola
+                if strokes.iter().all(|s| !s.erase) {
+                    let p = b.prepare();
+                    for s in strokes {
+                        let pts: Vec<Pos2> = s.pts.iter().map(|q| self.to_screen(rect, p.to_world(*q))).collect();
+                        let w = (2.0 * s.r * self.view.ppm) as f32;
+                        for q in &pts {
+                            body_painter.circle_filled(*q, 0.5 * w, theme::BODY_FILL);
+                        }
+                        if pts.len() > 1 {
+                            body_painter.add(EShape::line(pts, Stroke::new(w, theme::BODY_FILL)));
+                        }
+                    }
+                }
                 if sel || hov {
                     let p = b.prepare();
                     let r = Rect::from_two_pos(self.to_screen(rect, [p.bbox[0], p.bbox[1]]), self.to_screen(rect, [p.bbox[2], p.bbox[3]]));

@@ -5,6 +5,8 @@ Rysujesz profile lotnicze, walce, budynki czy samochód, wybierasz płyn, temper
 współczynniki Cd/Cl/Cm, liczbę Strouhala, rozkład ciśnienia na powierzchni i biegunową profilu. Każdy wynik ma ocenę wiarygodności,
 która mówi wprost, czy przy danej rozdzielczości i liczbie Reynoldsa jest ilościowy, czy tylko jakościowy.
 
+![AeroFlow — przeciągnięcie profilu NACA 0012 przy 16°, pole wirowości](assets/screenshot.png)
+
 ## Instalacja
 
 Pobierz najnowsze wydanie ze strony [Releases](https://github.com/BlackSingularities/aeroflow/releases):
