@@ -17,6 +17,7 @@ use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use super::geometry::{Body, Prepared};
+use super::gpu::{self, GpuSolver, StepInput};
 
 pub const CX: [i32; 9] = [0, 1, 0, -1, 0, 1, -1, -1, 1];
 pub const CY: [i32; 9] = [0, 0, 1, 0, -1, 1, 1, -1, -1];
@@ -126,24 +127,25 @@ pub struct Lattice {
     pub ny: usize,
     pub win: Window,
     pub layout: Layout,
-    /// Populacje po kolizji, układ SoA: f[i·n + komórka].
-    f: Vec<f32>,
+    /// Populacje po kolizji, układ SoA: f[i·n + komórka]. Przy obliczeniach na GPU aktualne są
+    /// tylko po resecie — bieżący stan żyje w pamięci karty.
+    pub(crate) f: Vec<f32>,
     g: Vec<f32>,
-    kind: Vec<u8>,
+    pub(crate) kind: Vec<u8>,
     pub rho: Vec<f32>,
     pub ux: Vec<f32>,
     pub uy: Vec<f32>,
     /// Lepkość turbulentna modelu LES (jednostki siatki).
     pub nut: Vec<f32>,
     pub labels: Vec<u16>,
-    link_idx: Vec<u32>,
-    link_q: Vec<[f32; 9]>,
+    pub(crate) link_idx: Vec<u32>,
+    pub(crate) link_q: Vec<[f32; 9]>,
     pub links: Vec<Link>,
-    sponge_row: Vec<f32>,
-    sponge_col: Vec<f32>,
+    pub(crate) sponge_row: Vec<f32>,
+    pub(crate) sponge_col: Vec<f32>,
     /// Bazowy profil prędkości wlotu dla każdego wiersza (jednostki siatki).
     pub profile: Vec<f32>,
-    eq_row: Vec<[f32; 9]>,
+    pub(crate) eq_row: Vec<[f32; 9]>,
     pub u_lb: f32,
     pub nu_lb: f32,
     pub smagorinsky: f32,
@@ -151,11 +153,17 @@ pub struct Lattice {
     pub tau_min: f32,
     keep_bulk: f32,
     pub profile_kind: InletProfile,
-    pivots: Vec<[f64; 2]>,
-    /// Średnia siła i moment z ostatniego wywołania `step` dla każdego ciała: [Fx, Fy, Mz] (siatka).
+    pub(crate) pivots: Vec<[f64; 2]>,
+    /// Średnia siła i moment od ostatniej synchronizacji dla każdego ciała: [Fx, Fy, Mz] (siatka).
     pub forces: Vec<[f64; 3]>,
     pub steps: u64,
-    phases: [[f32; 2]; 8],
+    pub(crate) phases: [[f32; 2]; 8],
+    gpu: Option<GpuSolver>,
+    /// Suma sił z kroków policzonych na CPU od ostatniej synchronizacji.
+    pending_force: Vec<[f64; 3]>,
+    pending_steps: usize,
+    /// Komunikat, gdy karta zawiodła w trakcie pracy i obliczenia wróciły na CPU.
+    pub gpu_error: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -230,6 +238,10 @@ impl Lattice {
             forces: Vec::new(),
             steps: 0,
             phases: [[0.0; 2]; 8],
+            gpu: None,
+            pending_force: Vec::new(),
+            pending_steps: 0,
+            gpu_error: None,
         };
         let mut seed = 0x9E37_79B9_u32;
         for p in lat.phases.iter_mut() {
@@ -256,7 +268,36 @@ impl Lattice {
         self.profile_kind = profile;
         if changed {
             self.rebuild_profile();
+            if let Some(g) = &mut self.gpu {
+                g.geometry_dirty = true;
+            }
         }
+    }
+
+    /// Przenosi obliczenia na kartę graficzną. Zwraca nazwę karty albo `None`, gdy GPU nie jest
+    /// dostępne lub siatka nie mieści się w jego pamięci (wtedy liczy dalej CPU).
+    pub fn enable_gpu(&mut self) -> Option<String> {
+        if let Some(g) = &self.gpu {
+            return Some(g.name().to_string());
+        }
+        let ctx = gpu::context()?;
+        let mut g = GpuSolver::new(ctx, self.nx, self.ny)?;
+        g.upload_geometry(self);
+        g.upload_state(self);
+        let name = g.name().to_string();
+        self.gpu = Some(g);
+        Some(name)
+    }
+
+    /// Wraca do obliczeń na CPU (przepływ startuje od nowa — stan z karty nie jest kopiowany).
+    pub fn disable_gpu(&mut self) {
+        if self.gpu.take().is_some() {
+            self.reset_flow();
+        }
+    }
+
+    pub fn gpu_name(&self) -> Option<&str> {
+        self.gpu.as_ref().map(|g| g.name())
     }
 
     fn rebuild_profile(&mut self) {
@@ -298,6 +339,12 @@ impl Lattice {
         }
         self.g.copy_from_slice(&self.f);
         self.steps = 0;
+        self.pending_force.clear();
+        self.pending_steps = 0;
+        if let Some(g) = &mut self.gpu {
+            g.state_dirty = true;
+            g.discard_pending();
+        }
     }
 
     /// Przekształcenie: punkt świata [m] → współrzędne siatki (środek komórki (i,j) to (i+½, j+½)).
@@ -397,7 +444,13 @@ impl Lattice {
         self.links = links;
         self.pivots = bodies.iter().map(|b| self.world_to_lattice(b.pos, dx)).collect();
         self.forces = vec![[0.0; 3]; bodies.len()];
+        self.pending_force.clear();
+        self.pending_steps = 0;
         self.rebuild_kinds();
+        if let Some(g) = &mut self.gpu {
+            g.geometry_dirty = true;
+            g.discard_pending();
+        }
     }
 
     /// Profil wlotu w chwili bieżącej: baza + syntetyczna turbulencja (suma modów o losowych fazach).
@@ -424,24 +477,77 @@ impl Lattice {
         (iu, iv)
     }
 
-    /// Wykonuje `n` kroków. Siły w `forces` to średnia z tych kroków.
+    /// Wykonuje `n` kroków i synchronizuje wyniki. Siły w `forces` to średnia z tych kroków.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn step(&mut self, n: usize) -> Result<(), Unstable> {
+        self.advance(n)?;
+        self.sync()
+    }
+
+    /// Wykonuje `n` kroków bez kopiowania wyników z karty — pola `rho`, `ux`, `uy`, `nut` i `forces`
+    /// odświeża dopiero [`Lattice::sync`]. Na CPU niestabilność jest zgłaszana od razu.
+    pub fn advance(&mut self, n: usize) -> Result<(), Unstable> {
+        if let Some(mut g) = self.gpu.take() {
+            if g.geometry_dirty {
+                g.upload_geometry(self);
+            }
+            if g.state_dirty {
+                g.upload_state(self);
+            }
+            let inp = StepInput {
+                tau0: (3.0 * self.nu_lb + 0.5).max(self.tau_min),
+                les_k: 18.0 * std::f32::consts::SQRT_2 * self.smagorinsky * self.smagorinsky,
+                keep_bulk: self.keep_bulk,
+                rho_ref: self.reference_density(),
+            };
+            g.run(self, self.steps, n, &inp);
+            self.steps += n as u64;
+            self.gpu = Some(g);
+            return Ok(());
+        }
         let nb = self.pivots.len();
-        let mut total = vec![[0f64; 3]; nb];
+        if self.pending_force.len() != nb {
+            self.pending_force = vec![[0.0; 3]; nb];
+        }
         for _ in 0..n {
             let fr = self.step_once()?;
-            for (t, f) in total.iter_mut().zip(fr) {
+            for (t, f) in self.pending_force.iter_mut().zip(fr) {
                 for c in 0..3 {
                     t[c] += f[c];
                 }
             }
+            self.pending_steps += 1;
         }
-        for t in total.iter_mut() {
-            for c in t.iter_mut() {
-                *c /= n.max(1) as f64;
+        Ok(())
+    }
+
+    /// Kopiuje wyniki porcji kroków (pola i średnie siły) i sprawdza stabilność.
+    pub fn sync(&mut self) -> Result<(), Unstable> {
+        let (total, steps, bad) = if let Some(mut g) = self.gpu.take() {
+            match g.read(self) {
+                Ok(r) => {
+                    self.gpu = Some(g);
+                    r
+                }
+                Err(e) => {
+                    // karta przestała odpowiadać — dalej liczy CPU, od świeżego przepływu
+                    log::error!("błąd GPU: {e}");
+                    self.gpu_error = Some(e);
+                    self.reset_flow();
+                    return Ok(());
+                }
             }
+        } else {
+            let nb = self.pivots.len();
+            let t = std::mem::replace(&mut self.pending_force, vec![[0.0; 3]; nb]);
+            (t, std::mem::take(&mut self.pending_steps), false)
+        };
+        if steps > 0 {
+            self.forces = total.into_iter().map(|t| t.map(|v| v / steps as f64)).collect();
         }
-        self.forces = total;
+        if bad || !self.rho[self.nx * (self.ny / 2) + self.nx / 2].is_finite() {
+            return Err(Unstable);
+        }
         Ok(())
     }
 
@@ -658,6 +764,8 @@ impl Lattice {
         std::mem::swap(&mut self.f, &mut self.g);
         self.steps += 1;
         if bad || !self.rho[self.nx * (self.ny / 2) + self.nx / 2].is_finite() {
+            self.pending_force.clear();
+            self.pending_steps = 0;
             return Err(Unstable);
         }
         Ok(forces)
@@ -859,5 +967,63 @@ mod noise {
         }
         let noise = s / n as f64 / u.u_lb;
         assert!(noise < 0.003, "szum siatkowy {noise}");
+    }
+}
+
+#[cfg(test)]
+mod airfoil_validation {
+    use super::*;
+    use crate::physics::geometry::{Body, Naca, Shape};
+
+    /// NACA 0012 przy Re = 2000: zwraca (Cl, Cd, średnie Cp górnej i dolnej powierzchni na 20–60 % cięciwy).
+    fn naca0012(alpha: f64, res: usize, steps: usize) -> (f64, f64, f64, f64) {
+        let domain = [1.2, 0.6];
+        let dx = domain[1] / res as f64;
+        let nx = (domain[0] / dx).round() as usize;
+        let mut lat = Lattice::new(Layout { nx, ny: res, top: Boundary::FreeStream, bottom: Boundary::FreeStream });
+        let chord = 0.2;
+        let c_cells = chord / dx;
+        let u = 0.05f32;
+        lat.set_params(u, u * c_cells as f32 / 2000.0, 0.15, 0.0, InletProfile::Uniform);
+        let body = Body::new(1, Shape::Airfoil { chord, naca: Naca::new(0.0, 0.4, 0.12) }, [0.36, 0.3], alpha);
+        lat.set_bodies(std::slice::from_ref(&body), dx);
+        lat.reset_flow();
+        if lat.enable_gpu().is_none() {
+            eprintln!("(liczone na CPU)");
+        }
+        lat.step(steps).unwrap();
+        lat.step(2000).unwrap();
+        let q = 0.5 * (u as f64).powi(2) * c_cells;
+        let (cd, cl) = (lat.forces[0][0] / q, lat.forces[0][1] / q);
+        let rref = lat.reference_density();
+        let (mut up, mut nu, mut lo, mut nl) = (0f64, 0, 0f64, 0);
+        for l in &lat.links {
+            let xc = l.local[0] as f64 / chord + 0.25;
+            if (0.2..0.6).contains(&xc) {
+                let cp = ((lat.rho[l.cell as usize] - rref) / 3.0 / (0.5 * u * u)) as f64;
+                if l.local[1] > 0.0 {
+                    up += cp;
+                    nu += 1;
+                } else {
+                    lo += cp;
+                    nl += 1;
+                }
+            }
+        }
+        (cl, cd, up / nu.max(1) as f64, lo / nl.max(1) as f64)
+    }
+
+    /// Profil symetryczny przy α = 0: brak siły nośnej, a w środkowej części cięciwy podciśnienie
+    /// z obu stron (Cp ≈ −0,35 z teorii potencjalnej dla grubości 12 %). Przy α = 4° rośnie różnica
+    /// ciśnień — górna powierzchnia ssie mocniej niż dolna.
+    #[test]
+    #[ignore]
+    fn naca0012_pressure_distribution() {
+        let (cl, _, up, lo) = naca0012(0.0, 240, 16000);
+        assert!(cl.abs() < 0.01, "Cl(0°) = {cl}");
+        assert!((-0.42..-0.28).contains(&up) && (up - lo).abs() < 0.01, "Cp góra {up}, dół {lo}");
+        let (cl, cd, up, lo) = naca0012(4.0, 240, 16000);
+        println!("α = 4°: Cl = {cl:.3}, Cd = {cd:.3}, Cp góra {up:.3}, dół {lo:.3}");
+        assert!(cl > 0.12 && up < lo - 0.08, "Cl = {cl}, Cp góra {up}, dół {lo}");
     }
 }

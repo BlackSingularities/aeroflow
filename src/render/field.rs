@@ -88,6 +88,12 @@ impl FieldKind {
     }
 
     /// Pole rozbieżne (symetryczna skala wokół zera).
+    /// Pola ciśnienia: zero (ciśnienie strumienia swobodnego) zawsze w środku skali, a górny koniec
+    /// skali to ciśnienie spiętrzenia (Cp = 1) — kolory mają stałe znaczenie fizyczne.
+    pub fn pressure_like(self) -> bool {
+        matches!(self, FieldKind::Pressure | FieldKind::Cp | FieldKind::MeanCp)
+    }
+
     pub fn symmetric(self) -> bool {
         matches!(self, FieldKind::Ux | FieldKind::Uy | FieldKind::Vorticity | FieldKind::Pressure | FieldKind::Cp | FieldKind::MeanCp)
     }
@@ -220,6 +226,20 @@ impl AutoRange {
     }
 }
 
+/// Wartość odpowiadająca położeniu na skali 0…1. Przy `centered` zero leży w środku skali, a obie
+/// połówki mają osobne zakresy (np. ssanie do −3, spiętrzenie do +1).
+pub fn scale_value(t: f32, lo: f32, hi: f32, centered: bool) -> f32 {
+    if centered && lo < 0.0 && hi > 0.0 {
+        if t < 0.5 {
+            lo * (1.0 - 2.0 * t)
+        } else {
+            hi * (2.0 * t - 1.0)
+        }
+    } else {
+        lo + (hi - lo) * t
+    }
+}
+
 /// Buduje obraz pola (rząd 0 obrazu = góra obszaru). Komórki ciał mają kolor `solid`.
 #[allow(clippy::too_many_arguments)]
 pub fn build_image(
@@ -229,11 +249,14 @@ pub fn build_image(
     labels: &[u16],
     lo: f32,
     hi: f32,
+    centered: bool,
     lut: &[Color32; 256],
     solid: Color32,
 ) -> ColorImage {
     let mut img = ColorImage::new([w, h], vec![Color32::BLACK; w * h]);
+    let centered = centered && lo < 0.0 && hi > 0.0;
     let k = 255.0 / (hi - lo).max(1e-30);
+    let (kn, kp) = (127.5 / (-lo).max(1e-30), 127.5 / hi.max(1e-30));
     for y in 0..h {
         let src = (h - 1 - y) * w;
         let dst = y * w;
@@ -241,8 +264,17 @@ pub fn build_image(
             img.pixels[dst + x] = if labels[src + x] != 0 {
                 solid
             } else {
-                let t = ((values[src + x] - lo) * k).clamp(0.0, 255.0);
-                lut[t as usize]
+                let v = values[src + x];
+                let t = if centered {
+                    if v < 0.0 {
+                        127.5 + v * kn
+                    } else {
+                        127.5 + v * kp
+                    }
+                } else {
+                    (v - lo) * k
+                };
+                lut[t.clamp(0.0, 255.0) as usize]
             };
         }
     }

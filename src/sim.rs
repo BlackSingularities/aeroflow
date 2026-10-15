@@ -26,8 +26,13 @@ pub enum Cmd {
     Speed(Speed),
     Averaging(bool),
     ResetAveraging,
-    Dye { rake: bool, enabled: bool },
+    Dye {
+        rake: bool,
+        enabled: bool,
+    },
     ClearDye,
+    /// Czy liczyć na karcie graficznej (gdy jest dostępna).
+    Gpu(bool),
     Quit,
 }
 
@@ -80,6 +85,8 @@ pub struct Frame {
     pub scene_rev: u64,
     pub paused: bool,
     pub error: Option<String>,
+    /// Nazwa karty graficznej, gdy obliczenia idą na GPU; `None` — CPU.
+    pub gpu: Option<String>,
 }
 
 impl Frame {
@@ -95,13 +102,13 @@ pub struct SimHandle {
 }
 
 impl SimHandle {
-    pub fn spawn(scene: Scene, rev: u64, ctx: eframe::egui::Context) -> Self {
+    pub fn spawn(scene: Scene, rev: u64, use_gpu: bool, ctx: eframe::egui::Context) -> Self {
         let (tx, rx) = mpsc::channel();
         let latest = Arc::new(Mutex::new(None));
         let out = latest.clone();
         let thread = std::thread::Builder::new()
             .name("symulacja".into())
-            .spawn(move || Worker::new(scene, rev, rx, out, ctx).run())
+            .spawn(move || Worker::new(scene, rev, use_gpu, rx, out, ctx).run())
             .expect("nie można uruchomić wątku symulacji");
         Self { tx, latest, thread: Some(thread) }
     }
@@ -160,6 +167,7 @@ struct Worker {
     mlups: f64,
     spf: usize,
     ratio: f64,
+    use_gpu: bool,
 }
 
 fn layout_of(scene: &Scene) -> Layout {
@@ -168,7 +176,14 @@ fn layout_of(scene: &Scene) -> Layout {
 }
 
 impl Worker {
-    fn new(scene: Scene, rev: u64, rx: Receiver<Cmd>, out: Arc<Mutex<Option<Arc<Frame>>>>, ctx: eframe::egui::Context) -> Self {
+    fn new(
+        scene: Scene,
+        rev: u64,
+        use_gpu: bool,
+        rx: Receiver<Cmd>,
+        out: Arc<Mutex<Option<Arc<Frame>>>>,
+        ctx: eframe::egui::Context,
+    ) -> Self {
         let lat = Lattice::new(layout_of(&scene));
         let units = scene.flow.units();
         let n = lat.win.w * lat.win.h;
@@ -192,6 +207,7 @@ impl Worker {
             mlups: 0.0,
             spf: 1,
             ratio: 0.0,
+            use_gpu,
         };
         w.apply_scene(scene, true);
         w
@@ -204,6 +220,9 @@ impl Worker {
         let units = f.units();
         if new_grid {
             self.lat = Lattice::new(layout);
+            if self.use_gpu {
+                self.lat.enable_gpu();
+            }
             self.dye = vec![0.0; self.lat.win.w * self.lat.win.h];
             self.avg = None;
         }
@@ -278,6 +297,18 @@ impl Worker {
                         self.dye_on = enabled;
                     }
                     Cmd::ClearDye => self.dye.iter_mut().for_each(|d| *d = 0.0),
+                    Cmd::Gpu(on) => {
+                        self.use_gpu = on;
+                        if on {
+                            // stan z CPU przechodzi na kartę bez przerywania przepływu
+                            self.lat.enable_gpu();
+                        } else {
+                            self.lat.disable_gpu();
+                            self.time = 0.0;
+                            self.avg = None;
+                        }
+                        self.mlups = 0.0;
+                    }
                 }
                 if self.paused && !step_once {
                     // po zmianie w pauzie od razu pokaż nowy stan
@@ -297,11 +328,13 @@ impl Worker {
                     }
                 };
                 // porcje kroków aż do wyczerpania budżetu klatki
+                let max_chunk = if self.lat.gpu_name().is_some() { 512 } else { 64 };
+                let mut failed = false;
                 while done < target {
                     let n = steps_hint.min(target - done).max(1);
                     let ts = Instant::now();
-                    if self.lat.step(n).is_err() {
-                        self.unstable();
+                    if self.lat.advance(n).is_err() {
+                        failed = true;
                         break;
                     }
                     done += n;
@@ -312,8 +345,16 @@ impl Worker {
                         if left < per {
                             break;
                         }
-                        steps_hint = ((left / per) as usize).clamp(1, 64);
+                        steps_hint = ((left / per) as usize).clamp(1, max_chunk);
                     }
+                }
+                if failed || (done > 0 && self.lat.sync().is_err()) {
+                    self.unstable();
+                    done = 0;
+                }
+                if let Some(e) = self.lat.gpu_error.take() {
+                    self.error = Some(format!("Karta graficzna przestała odpowiadać ({e}). Obliczenia przeniesiono na procesor."));
+                    self.use_gpu = false;
                 }
                 if done > 0 {
                     self.advect_dye(done);
@@ -485,6 +526,7 @@ impl Worker {
             scene_rev: self.rev,
             paused: self.paused,
             error: self.error.clone(),
+            gpu: lat.gpu_name().map(str::to_string),
         };
         if let Ok(mut g) = self.out.lock() {
             *g = Some(Arc::new(frame));

@@ -5,7 +5,7 @@ Rysujesz profile lotnicze, walce, budynki czy samochód, wybierasz płyn, temper
 współczynniki Cd/Cl/Cm, liczbę Strouhala, rozkład ciśnienia na powierzchni i biegunową profilu. Każdy wynik ma ocenę wiarygodności,
 która mówi wprost, czy przy danej rozdzielczości i liczbie Reynoldsa jest ilościowy, czy tylko jakościowy.
 
-![AeroFlow — przeciągnięcie profilu NACA 0012 przy 16°, pole wirowości](assets/screenshot.png)
+![AeroFlow — przeciągnięcie profilu NACA 0012 przy 16°, pole wirowości, obliczenia na GPU](assets/screenshot.png)
 
 ## Instalacja
 
@@ -14,10 +14,11 @@ Pobierz najnowsze wydanie ze strony [Releases](https://github.com/BlackSingulari
 | Plik | Opis |
 | --- | --- |
 | `AeroFlow-Setup-X.Y.Z.exe` | instalator Windows (menu Start, skrót, skojarzenie plików `.aeroflow`, deinstalator) |
-| `AeroFlow-X.Y.Z-windows-x64-portable.zip` | wersja przenośna bez instalacji |
+| `AeroFlow-X.Y.Z-windows-x64-portable.exe` | wersja przenośna — jeden plik, bez instalacji |
 | `AeroFlow-X.Y.Z-linux-x64.tar.gz` | Linux x64 |
 
 Instalator domyślnie instaluje program dla bieżącego użytkownika (bez uprawnień administratora), więc aktualizacje nie wymagają potwierdzania UAC.
+Wersja przenośna to jeden plik `.exe` — wystarczy go uruchomić.
 Plik nie jest podpisany certyfikatem, dlatego przy pierwszym uruchomieniu Windows SmartScreen może pokazać ostrzeżenie („Więcej informacji → Uruchom mimo to”).
 
 ### Aktualizacje
@@ -28,6 +29,22 @@ i przyciskiem **Pobierz i zainstaluj**: instalator jest pobierany, weryfikowany 
 
 > Sprawdzanie aktualizacji korzysta z publicznego API GitHub Releases — działa, gdy repozytorium (lub repozytorium z wydaniami
 > wskazane przy kompilacji zmienną `AEROFLOW_UPDATE_REPO=właściciel/repo`) jest publiczne.
+
+## Interfejs
+
+- **Górny pasek** — scenariusz (📂), Start / Pauza, wybór pola (Prędkość, Ciśnienie, Wirowość, Dym, Więcej), nakładki,
+  plakietka GPU / CPU, wykresy, panel i menu ☰.
+- **Pasek narzędzi** po lewej — Zaznacz, ciała (profil, walec, prostokąt, elipsa, dowolny kształt), ściany (pędzel, gumka),
+  pomiar (źródło dymu, sonda). Podpowiedź aktywnego narzędzia jest na dole widoku.
+- **Inspektor** po prawej — od góry: wyniki dla głównego ciała, zaznaczony obiekt (wymiary, kąt natarcia), warunki przepływu;
+  niżej zwinięte sekcje *Obszar i brzegi*, *Wyświetlanie* i *Obliczenia*.
+
+## Obliczenia na GPU
+
+Solver działa na karcie graficznej przez wgpu (Vulkan, DirectX 12, Metal). Populacje siatki są cały czas w pamięci karty,
+a do interfejsu wracają tylko prędkość, ciśnienie i siły raz na klatkę. Na RTX 4070 Ti to ok. 4800 MLUPS (milionów
+aktualizacji komórek na sekundę) wobec ok. 300 MLUPS na procesorze, więc można liczyć gęstsze siatki — sekcja
+*Obliczenia → Rozdzielczość* pozwala na 900 i więcej komórek na wysokość. Bez obsługiwanej karty program liczy na procesorze.
 
 ## Fizyka
 
@@ -53,7 +70,13 @@ LES — jakościowy) informuje, jak traktować wynik.
 
 Scenariusze z grupy *Walidacja* mają wartości z literatury, a panel *Siły* porównuje z nimi wynik po ustaleniu przepływu:
 walec przy Re = 20, 100 i 200 (Cd, amplituda Cl, liczba Strouhala) oraz pręt kwadratowy przy Re = 100.
-Testy automatyczne sprawdzają m.in. profil Poiseuille'a w kanale i opór walca przy Re = 20.
+Testy automatyczne sprawdzają m.in. profil Poiseuille'a w kanale, opór walca przy Re = 20, rozkład ciśnienia na profilu
+NACA 0012 oraz zgodność jądra GPU z jądrem CPU.
+
+Skala kolorów ciśnienia jest fizyczna: biel to ciśnienie otoczenia, czerwień — spiętrzenie (Cp = 1), błękit — ssanie.
+Na profilu o grubości 12 % podciśnienie występuje w środkowej części cięciwy po **obu** stronach (Cp ≈ −0,35 przy α = 0°);
+siła nośna bierze się z tego, że przy dodatnim kącie natarcia strona górna ssie mocniej, a pod przednią częścią dolnej
+powierzchni powstaje nadciśnienie.
 
 ## Funkcje
 

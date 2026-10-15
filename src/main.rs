@@ -15,13 +15,14 @@ use std::path::PathBuf;
 
 fn main() -> eframe::Result<()> {
     env_logger::init();
-    // aeroflow [plik.aeroflow] [--preset ID] [--field NAZWA]
+    // aeroflow [plik.aeroflow] [--preset ID] [--field NAZWA] [--capture PLIK.png [--capture-after S]]
     let args: Vec<String> = std::env::args().skip(1).collect();
     let flag = |name: &str| args.iter().position(|a| a == name).and_then(|i| args.get(i + 1)).cloned();
     let launch = app::Launch {
         open: args.iter().find(|a| !a.starts_with("--") && std::path::Path::new(a).exists()).map(PathBuf::from),
         preset: flag("--preset"),
         field: flag("--field"),
+        capture: flag("--capture").map(|p| (PathBuf::from(p), flag("--capture-after").and_then(|s| s.parse().ok()).unwrap_or(4.0))),
     };
     let open = launch;
     let icon = eframe::icon_data::from_png_bytes(include_bytes!("../assets/icon.png")).unwrap_or_default();

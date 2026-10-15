@@ -91,13 +91,11 @@ jobs:
           choco upgrade innosetup -y --no-progress | Out-Null
           & $iscc /Qp "/DAppVersion=$env:VERSION" installer\aeroflow.iss
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-      - name: Wersja przenośna i sumy kontrolne
+      - name: Wersja przenośna (jeden plik .exe) i sumy kontrolne
         shell: pwsh
         run: |
-          New-Item -ItemType Directory -Force dist/portable | Out-Null
-          Copy-Item target/release/aeroflow.exe, README.md, CHANGELOG.md, LICENSE dist/portable/
-          Compress-Archive -Path dist/portable/* -DestinationPath "dist/AeroFlow-$env:VERSION-windows-x64-portable.zip"
-          Remove-Item -Recurse dist/portable
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Copy-Item target/release/aeroflow.exe "dist/AeroFlow-$env:VERSION-windows-x64-portable.exe"
           Get-ChildItem dist -File | ForEach-Object {
             $h = (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower()
             [IO.File]::WriteAllText("$($_.FullName).sha256", "$h  $($_.Name)`n")
@@ -164,7 +162,7 @@ jobs:
             echo
             echo "### Instalacja"
             echo "- **Windows:** pobierz \`AeroFlow-Setup-$VERSION.exe\` i uruchom. Zainstalowany program sam powiadamia o kolejnych wersjach i aktualizuje się jednym kliknięciem."
-            echo "- **Windows (bez instalacji):** \`AeroFlow-$VERSION-windows-x64-portable.zip\`."
+            echo "- **Windows (bez instalacji):** \`AeroFlow-$VERSION-windows-x64-portable.exe\` — jeden plik, wystarczy uruchomić."
             echo "- **Linux:** \`AeroFlow-$VERSION-linux-x64.tar.gz\`."
             echo
             echo "Sumy SHA-256 znajdują się w plikach \`.sha256\`."

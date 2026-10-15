@@ -75,6 +75,22 @@ impl Tool {
         }
     }
 
+    /// Podpis pod ikoną w pasku narzędzi.
+    pub fn short(self) -> &'static str {
+        match self {
+            Tool::Select => "Zaznacz",
+            Tool::Airfoil => "Profil",
+            Tool::Circle => "Walec",
+            Tool::Rect => "Prostokąt",
+            Tool::Ellipse => "Elipsa",
+            Tool::Polygon => "Kształt",
+            Tool::Brush => "Ściana",
+            Tool::Eraser => "Gumka",
+            Tool::Emitter => "Dym",
+            Tool::Probe => "Sonda",
+        }
+    }
+
     pub fn hint(self) -> &'static str {
         match self {
             Tool::Select => "Kliknij obiekt, by go zaznaczyć; przeciągnij, by przesunąć. Uchwyt obraca, Q/E obraca o 1° (Shift: 5°), strzałki przesuwają. Przeciąganie tła przesuwa widok.",
@@ -89,14 +105,6 @@ impl Tool {
             Tool::Probe => "Kliknij, by postawić sondę mierzącą prędkość i ciśnienie w czasie. Kliknięcie sondy ją usuwa.",
         }
     }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum SideTab {
-    Flow,
-    Objects,
-    View,
-    Solver,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -140,6 +148,8 @@ pub struct Launch {
     pub open: Option<PathBuf>,
     pub preset: Option<String>,
     pub field: Option<String>,
+    /// Zrzut całego okna do pliku po zadanym czasie i zamknięcie programu (dokumentacja, testy wyglądu).
+    pub capture: Option<(PathBuf, f32)>,
 }
 
 pub struct SweepCfg {
@@ -186,7 +196,6 @@ pub struct App {
     pub toast: Option<(String, Instant)>,
     pub file_path: Option<PathBuf>,
     pub saved_scene: Scene,
-    pub side_tab: SideTab,
     pub chart_tab: ChartTab,
     pub chart_body: Option<u64>,
     pub selected_probe: usize,
@@ -197,6 +206,8 @@ pub struct App {
     pub hover: Option<V2>,
     pub re_target: f64,
     pub hide_ui: bool,
+    capture: Option<(PathBuf, f32, bool)>,
+    started: Instant,
 }
 
 impl App {
@@ -233,7 +244,7 @@ impl App {
             prefs.field = f;
         }
 
-        let sim = SimHandle::spawn(scene.clone(), 0, cc.egui_ctx.clone());
+        let sim = SimHandle::spawn(scene.clone(), 0, prefs.gpu, cc.egui_ctx.clone());
         sim.send(Cmd::Speed(match prefs.speed {
             SpeedPref::Auto => Speed::Auto,
             SpeedPref::Fixed(n) => Speed::Fixed(n),
@@ -246,7 +257,7 @@ impl App {
         }
         let mut win = Windows::default();
         let current = update::VERSION.to_string();
-        if !prefs.last_version.is_empty() && prefs.last_version != current {
+        if !prefs.last_version.is_empty() && prefs.last_version != current && launch.capture.is_none() {
             let notes = prefs.update_notes.take().filter(|(v, n)| *v == current && !n.trim().is_empty()).map(|(_, n)| n);
             win.whats_new = Some(
                 notes
@@ -295,7 +306,6 @@ impl App {
             win,
             toast,
             file_path,
-            side_tab: SideTab::Flow,
             chart_tab: ChartTab::Forces,
             chart_body: None,
             selected_probe: 0,
@@ -306,6 +316,8 @@ impl App {
             hover: None,
             re_target: 1000.0,
             hide_ui: false,
+            capture: launch.capture.map(|(p, s)| (p, s, false)),
+            started: Instant::now(),
         }
     }
 
@@ -657,6 +669,23 @@ impl App {
                 _ => None,
             })
         });
+        if let Some((path, after, requested)) = &mut self.capture {
+            if !*requested && self.started.elapsed().as_secs_f32() > *after {
+                *requested = true;
+                ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(egui::UserData::default()));
+            } else if *requested {
+                if let Some(img) = &img {
+                    let [w, h] = img.size;
+                    let buf: Vec<u8> = img.pixels.iter().flat_map(|p| [p.r(), p.g(), p.b(), 255]).collect();
+                    if let Err(e) = image::save_buffer(&*path, &buf, w as u32, h as u32, image::ExtendedColorType::Rgba8) {
+                        log::error!("zrzut: {e}");
+                    }
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                    return;
+                }
+            }
+            ctx.request_repaint();
+        }
         let (Some(img), Some((path, rect))) = (img, self.screenshot.take()) else { return };
         let ppp = ctx.pixels_per_point();
         let crop = img.region(&rect, Some(ppp));
@@ -776,6 +805,12 @@ impl App {
                         // tylko dodatnie Q (rdzenie wirów)
                         let pos: Vec<f32> = v.iter().map(|q| q.max(0.0)).collect();
                         r.update(&pos, &f.labels, false, true);
+                    } else if kind.pressure_like() {
+                        // górny koniec = ciśnienie spiętrzenia (Cp = 1), dolny = najsilniejsze ssanie
+                        let stag = if kind == FieldKind::Pressure { (0.5 * f.units.rho * f.units.u_inf.powi(2)) as f32 } else { 1.0 };
+                        r.update(v, &f.labels, false, false);
+                        r.lo = r.lo.min(-0.5 * stag);
+                        r.hi = stag;
                     } else {
                         r.update(v, &f.labels, kind.symmetric(), nonneg);
                         if matches!(kind, FieldKind::Speed | FieldKind::MeanSpeed) {
@@ -789,7 +824,7 @@ impl App {
             None => (0.0, 1.0),
         };
         let img = match &values {
-            Some(v) => build_image(v, f.w, f.h, &f.labels, lo, hi, &self.prefs.colormap(kind).lut(), solid),
+            Some(v) => build_image(v, f.w, f.h, &f.labels, lo, hi, kind.pressure_like(), &self.prefs.colormap(kind).lut(), solid),
             None => {
                 let bg = theme::FIELD_OFF;
                 let mut img = egui::ColorImage::new([f.w, f.h], vec![bg; f.w * f.h]);
@@ -844,7 +879,7 @@ impl eframe::App for App {
         let before = self.scene.clone();
 
         if !self.hide_ui {
-            self.menu_bar(ctx);
+            self.top_bar(ctx);
             self.update_banner(ctx);
             self.status_bar(ctx);
             if self.prefs.show_bottom {
@@ -867,6 +902,10 @@ impl eframe::App for App {
     }
 
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
+        if self.capture.is_some() {
+            // tryb zrzutu nie nadpisuje ustawień ani ostatniej sceny użytkownika
+            return;
+        }
         self.prefs.last_scene = Some(self.scene.to_json());
         eframe::set_value(storage, "prefs", &self.prefs);
     }

@@ -9,6 +9,7 @@ pub const ACCENT: Color32 = Color32::from_rgb(56, 189, 248);
 pub const ACCENT_DIM: Color32 = Color32::from_rgb(14, 86, 122);
 pub const TEXT: Color32 = Color32::from_rgb(220, 228, 238);
 pub const TEXT_DIM: Color32 = Color32::from_rgb(140, 152, 170);
+pub const CARD_EDGE: Color32 = Color32::from_rgb(38, 46, 60);
 pub const BODY_FILL: Color32 = Color32::from_rgb(38, 46, 60);
 pub const BODY_EDGE: Color32 = Color32::from_rgb(150, 170, 196);
 pub const FIELD_OFF: Color32 = Color32::from_rgb(12, 16, 24);

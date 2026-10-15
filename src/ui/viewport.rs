@@ -302,12 +302,25 @@ impl App {
 
         // podpowiedź narzędzia
         if !self.hide_ui {
-            let hint = self.tool.hint();
-            let pos = Pos2::new(rect.left() + 12.0, rect.bottom() - 12.0);
-            let galley = painter.layout(hint.to_string(), FontId::proportional(12.0), theme::TEXT_DIM, (rect.width() * 0.55).max(200.0));
-            let r = Rect::from_min_size(pos - Vec2::new(0.0, galley.size().y), galley.size()).expand(6.0);
-            painter.rect_filled(r, 6.0, Color32::from_rgba_unmultiplied(10, 13, 19, 200));
-            painter.galley(r.min + Vec2::splat(6.0), galley, theme::TEXT_DIM);
+            // podpowiedź aktywnego narzędzia: nazwa + co zrobić, na dole pośrodku
+            let mut job = egui::text::LayoutJob::default();
+            job.append(
+                &format!("{}   ", self.tool.label()),
+                0.0,
+                egui::TextFormat { font_id: FontId::proportional(12.5), color: theme::ACCENT, ..Default::default() },
+            );
+            job.append(
+                self.tool.hint(),
+                0.0,
+                egui::TextFormat { font_id: FontId::proportional(12.5), color: theme::TEXT, ..Default::default() },
+            );
+            job.wrap.max_width = (rect.width() * 0.6).max(240.0);
+            let galley = painter.layout_job(job);
+            let size = galley.size();
+            let pos = Pos2::new(rect.center().x - size.x * 0.5, rect.bottom() - 14.0 - size.y);
+            let r = Rect::from_min_size(pos, size).expand2(Vec2::new(12.0, 7.0));
+            painter.rect_filled(r, 14.0, Color32::from_rgba_unmultiplied(10, 13, 19, 215));
+            painter.galley(pos, galley, theme::TEXT);
         }
         if self.paused {
             let r = Rect::from_center_size(Pos2::new(rect.center().x, rect.top() + 26.0), Vec2::new(150.0, 28.0));
@@ -739,7 +752,8 @@ impl App {
     }
 
     fn draw_hud(&self, ui: &egui::Ui, rect: Rect) {
-        if !self.prefs.show_hud {
+        // wyniki są w panelu Inspektor; na widoku tylko wtedy, gdy panel jest ukryty
+        if !self.prefs.show_hud || (self.prefs.show_side && !self.hide_ui) {
             return;
         }
         let units = self.scene.flow.units();
@@ -845,7 +859,7 @@ impl App {
         let unit = kind.unit();
         for k in 0..=4 {
             let t = k as f32 / 4.0;
-            let v = lo + (hi - lo) * t;
+            let v = crate::render::field::scale_value(t, lo, hi, kind.pressure_like());
             let y = bar.bottom() - t * bar.height();
             painter.line_segment([Pos2::new(bar.left() - 4.0, y), Pos2::new(bar.left(), y)], Stroke::new(1.0_f32, theme::TEXT_DIM));
             painter.text(
@@ -955,7 +969,6 @@ impl App {
                 ui.close();
             }
             if ui.button("⚙  Właściwości…").clicked() {
-                self.side_tab = crate::app::SideTab::Objects;
                 self.prefs.show_side = true;
                 ui.close();
             }

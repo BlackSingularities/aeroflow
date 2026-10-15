@@ -2,6 +2,26 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/pl/1.1.0/), wersjonowanie: [SemVer](https://semver.org/lang/pl/).
 
+## [1.1.0] — 2026-10-15
+
+### Obliczenia na karcie graficznej
+- Solver działa na **GPU** (wgpu: Vulkan, DirectX 12, Metal) — kilkanaście razy szybciej niż na procesorze (np. RTX 4070 Ti: ok. 4800 MLUPS na siatce 1,4 mln komórek wobec ok. 300 MLUPS na CPU), więc w czasie rzeczywistym da się liczyć znacznie gęstsze siatki, a przez to wyższe liczby Reynoldsa.
+- Jądro GPU jest wiernym odpowiednikiem jądra CPU (te same brzegi, odbicie Bouzidiego, LES, siły); test automatyczny porównuje pola i siły obu wersji.
+- Gdy karty nie ma, sterownik jej nie udostępnia albo przestanie odpowiadać, program sam liczy na procesorze. Plakietka **GPU / CPU** w górnym pasku pokazuje, co liczy, i przełącza jednym kliknięciem.
+
+### Nowy interfejs
+- Górny pasek prowadzi przez pracę w kolejności: **scenariusz** (📂 z nazwą sceny) → **Start / Pauza** → **co pokazać** (Prędkość, Ciśnienie, Wirowość, Dym, Więcej) → nakładki (cząstki, linie prądu, wektory, siły). Pozostałe polecenia są w jednym menu ☰.
+- Pasek narzędzi z **podpisami** i grupami (Ciała, Ściany, Pomiar); podpowiedź aktywnego narzędzia na dole widoku.
+- Panel **Inspektor** zamiast czterech zakładek: na górze karta **Wyniki** (Cd, Cl, L/D lub St, Re, siły w N, stan ustalenia i wiarygodność), pod nią zaznaczony obiekt albo lista obiektów, potem **Warunki przepływu**. Obszar i brzegi, wyświetlanie oraz obliczenia są w zwijanych sekcjach.
+- Pasek stanu: czy liczy, czas fizyczny, tempo względem rzeczywistości, urządzenie i wydajność.
+
+### Ciśnienie
+- Skala kolorów ciśnienia i Cp ma teraz stałe znaczenie fizyczne: **biel = ciśnienie otoczenia**, pełna czerwień = ciśnienie spiętrzenia (Cp = 1), błękit = ssanie skalowane do najsilniejszego podciśnienia. Wcześniej skala dobierała się sama do 98,5. percentyla |Cp|, przez co zwykłe podciśnienie przy grubym profilu (Cp ≈ −0,3) wyglądało jak silne ssanie i obraz wokół skrzydła wydawał się niefizyczny.
+- Test walidacyjny rozkładu ciśnienia na NACA 0012 (Cp z obu stron przy α = 0°, różnica ciśnień przy α = 4°).
+
+### Wydania
+- Wersja przenośna to teraz **jeden plik `.exe`** bez archiwum.
+
 ## [1.0.0] — 2026-10-14
 
 Pierwsze wydanie przepisane od zera w Rust jako natywna aplikacja z instalatorem.
