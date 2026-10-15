@@ -176,7 +176,6 @@ impl App {
                         if chip(ui, self.prefs.show_bottom, "Wykresy").on_hover_text("Wykresy sił, Cp, biegunowa, sondy (G)").clicked() {
                             self.prefs.show_bottom = !self.prefs.show_bottom;
                         }
-                        self.compute_badge(ui);
                         if let State::Available(r) = self.updater.state() {
                             if ui
                                 .button(RichText::new(format!("⬆ {}", r.version)).color(theme::GOOD))
@@ -190,40 +189,6 @@ impl App {
                 });
             },
         );
-    }
-
-    /// Plakietka GPU/CPU — kliknięcie przełącza miejsce obliczeń.
-    fn compute_badge(&mut self, ui: &mut egui::Ui) {
-        let gpu = self.frame.as_ref().and_then(|f| f.gpu.clone());
-        let (text, col, tip) = match (&gpu, self.prefs.gpu) {
-            (Some(name), _) => {
-                ("⚡ GPU".to_string(), theme::GOOD, format!("Obliczenia na karcie graficznej: {name}\nKliknij, by liczyć na procesorze."))
-            }
-            (None, true) => (
-                "CPU".to_string(),
-                theme::WARN,
-                "Karta graficzna niedostępna (brak sterownika lub zbyt duża siatka) — liczy procesor.".to_string(),
-            ),
-            (None, false) => {
-                ("CPU".to_string(), theme::TEXT_DIM, "Obliczenia na procesorze. Kliknij, by użyć karty graficznej.".to_string())
-            }
-        };
-        let b = egui::Button::new(RichText::new(text).strong().color(col))
-            .fill(Color32::TRANSPARENT)
-            .stroke(Stroke::new(1.0_f32, col.gamma_multiply(0.6)))
-            .corner_radius(CornerRadius::same(14));
-        if ui.add(b).on_hover_text(tip).clicked() {
-            self.set_gpu(!self.prefs.gpu);
-        }
-    }
-
-    pub fn set_gpu(&mut self, on: bool) {
-        self.prefs.gpu = on;
-        self.sim.send(Cmd::Gpu(on));
-        if !on {
-            self.history.clear();
-            self.particles.clear();
-        }
     }
 
     fn scene_menu(&mut self, ui: &mut egui::Ui) {
@@ -1201,16 +1166,11 @@ impl App {
     fn solver_section(&mut self, ui: &mut egui::Ui) {
         section(ui, "Sprzęt");
         let gpu = self.frame.as_ref().and_then(|f| f.gpu.clone());
-        let mut on = self.prefs.gpu;
-        if ui.checkbox(&mut on, "Licz na karcie graficznej (GPU)").changed() {
-            self.set_gpu(on);
-        }
-        let (t, c) = match (&gpu, self.prefs.gpu) {
-            (Some(g), _) => (format!("Aktywne: {g}"), theme::GOOD),
-            (None, true) => ("GPU niedostępne — liczy procesor.".to_string(), theme::WARN),
-            (None, false) => ("Liczy procesor (wszystkie rdzenie).".to_string(), theme::TEXT_DIM),
+        let t = match &gpu {
+            Some(g) => format!("Karta graficzna: {g}"),
+            None => "Procesor (karta graficzna niedostępna)".to_string(),
         };
-        ui.label(RichText::new(t).size(11.5).color(c));
+        ui.label(RichText::new(t).size(11.5).color(theme::TEXT_DIM));
         if let Some(f) = &self.frame {
             ui.label(
                 RichText::new(format!("{} MLUPS · {} kroków na klatkę", fmt_num(f.mlups, 0), f.steps_per_frame))
@@ -1264,7 +1224,10 @@ impl App {
         section(ui, "Tempo");
         let mut s = self.prefs.speed;
         ui.horizontal(|ui| {
-            ui.radio_value(&mut s, SpeedPref::Auto, "Maksymalne");
+            ui.radio_value(&mut s, SpeedPref::Auto, "Płynne")
+                .on_hover_text("Strumień przechodzi przez widok w ok. 8 s — to samo tempo na każdym komputerze, wygodne do oglądania.");
+            ui.radio_value(&mut s, SpeedPref::Max, "Maksymalne")
+                .on_hover_text("Tak szybko, jak pozwala sprzęt — szybsze ustalanie wyników.");
             let fixed = match s {
                 SpeedPref::Fixed(n) => n,
                 _ => 8,

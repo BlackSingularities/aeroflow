@@ -244,9 +244,10 @@ impl App {
             prefs.field = f;
         }
 
-        let sim = SimHandle::spawn(scene.clone(), 0, prefs.gpu, cc.egui_ctx.clone());
+        let sim = SimHandle::spawn(scene.clone(), 0, cc.egui_ctx.clone());
         sim.send(Cmd::Speed(match prefs.speed {
-            SpeedPref::Auto => Speed::Auto,
+            SpeedPref::Auto => Speed::Paced,
+            SpeedPref::Max => Speed::Max,
             SpeedPref::Fixed(n) => Speed::Fixed(n),
         }));
         sim.send(Cmd::Dye { rake: prefs.smoke_rake, enabled: prefs.field == FieldKind::Smoke });
@@ -362,7 +363,8 @@ impl App {
     pub fn set_speed(&mut self, s: SpeedPref) {
         self.prefs.speed = s;
         self.sim.send(Cmd::Speed(match s {
-            SpeedPref::Auto => Speed::Auto,
+            SpeedPref::Auto => Speed::Paced,
+            SpeedPref::Max => Speed::Max,
             SpeedPref::Fixed(n) => Speed::Fixed(n),
         }));
     }
@@ -763,7 +765,7 @@ impl App {
             }
         }
         // cząstki
-        let steps = f.steps.saturating_sub(self.last_steps).min(64) as f32;
+        let steps = f.steps.saturating_sub(self.last_steps).min(4000) as f32;
         if f.steps < self.last_steps {
             self.particles.clear();
         }

@@ -33,7 +33,7 @@ i przyciskiem **Pobierz i zainstaluj**: instalator jest pobierany, weryfikowany 
 ## Interfejs
 
 - **Górny pasek** — scenariusz (📂), Start / Pauza, wybór pola (Prędkość, Ciśnienie, Wirowość, Dym, Więcej), nakładki,
-  plakietka GPU / CPU, wykresy, panel i menu ☰.
+  wykresy, panel i menu ☰.
 - **Pasek narzędzi** po lewej — Zaznacz, ciała (profil, walec, prostokąt, elipsa, dowolny kształt), ściany (pędzel, gumka),
   pomiar (źródło dymu, sonda). Podpowiedź aktywnego narzędzia jest na dole widoku.
 - **Inspektor** po prawej — od góry: wyniki dla głównego ciała, zaznaczony obiekt (wymiary, kąt natarcia), warunki przepływu;
@@ -44,7 +44,12 @@ i przyciskiem **Pobierz i zainstaluj**: instalator jest pobierany, weryfikowany 
 Solver działa na karcie graficznej przez wgpu (Vulkan, DirectX 12, Metal). Populacje siatki są cały czas w pamięci karty,
 a do interfejsu wracają tylko prędkość, ciśnienie i siły raz na klatkę. Na RTX 4070 Ti to ok. 4800 MLUPS (milionów
 aktualizacji komórek na sekundę) wobec ok. 300 MLUPS na procesorze, więc można liczyć gęstsze siatki — sekcja
-*Obliczenia → Rozdzielczość* pozwala na 900 i więcej komórek na wysokość. Bez obsługiwanej karty program liczy na procesorze.
+*Obliczenia → Rozdzielczość* pozwala na 900 i więcej komórek na wysokość. Karta jest używana automatycznie; bez obsługiwanej karty (albo gdy przestanie odpowiadać) program sam i bez przerwy
+przechodzi na procesor. Pasek stanu pokazuje, co liczy.
+
+Domyślne tempo **Płynne** jest takie samo na każdym komputerze: strumień przechodzi przez widok w ok. 8 s, więc ruch
+wirów i cząstek da się spokojnie oglądać. Tempo **Maksymalne** (sekcja *Obliczenia*) liczy tak szybko, jak pozwala
+sprzęt — przydaje się, gdy trzeba szybko uzyskać ustalone wyniki.
 
 ## Fizyka
 

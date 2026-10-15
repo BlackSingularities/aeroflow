@@ -289,13 +289,6 @@ impl Lattice {
         Some(name)
     }
 
-    /// Wraca do obliczeń na CPU (przepływ startuje od nowa — stan z karty nie jest kopiowany).
-    pub fn disable_gpu(&mut self) {
-        if self.gpu.take().is_some() {
-            self.reset_flow();
-        }
-    }
-
     pub fn gpu_name(&self) -> Option<&str> {
         self.gpu.as_ref().map(|g| g.name())
     }

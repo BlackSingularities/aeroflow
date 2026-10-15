@@ -13,10 +13,16 @@ use crate::scene::Scene;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Speed {
+    /// Płynne, niezależne od sprzętu tempo: strumień przechodzi przez widoczny obszar w
+    /// [`PACE_SECONDS`] sekund (wolniej, gdy sprzęt nie nadąża).
+    Paced,
     /// Tyle kroków, ile zmieści się w budżecie czasu klatki.
-    Auto,
+    Max,
     Fixed(usize),
 }
+
+/// Czas przejścia strumienia przez szerokość widoku w tempie płynnym [s].
+pub const PACE_SECONDS: f64 = 8.0;
 
 pub enum Cmd {
     Scene(Box<Scene>),
@@ -26,13 +32,8 @@ pub enum Cmd {
     Speed(Speed),
     Averaging(bool),
     ResetAveraging,
-    Dye {
-        rake: bool,
-        enabled: bool,
-    },
+    Dye { rake: bool, enabled: bool },
     ClearDye,
-    /// Czy liczyć na karcie graficznej (gdy jest dostępna).
-    Gpu(bool),
     Quit,
 }
 
@@ -102,7 +103,9 @@ pub struct SimHandle {
 }
 
 impl SimHandle {
-    pub fn spawn(scene: Scene, rev: u64, use_gpu: bool, ctx: eframe::egui::Context) -> Self {
+    /// Obliczenia idą na kartę graficzną, gdy jest dostępna; w przeciwnym razie na procesor.
+    pub fn spawn(scene: Scene, rev: u64, ctx: eframe::egui::Context) -> Self {
+        let use_gpu = std::env::var_os("AEROFLOW_CPU").is_none();
         let (tx, rx) = mpsc::channel();
         let latest = Arc::new(Mutex::new(None));
         let out = latest.clone();
@@ -168,6 +171,9 @@ struct Worker {
     spf: usize,
     ratio: f64,
     use_gpu: bool,
+    /// Zaległe kroki w tempie płynnym i chwila ostatniego rozliczenia.
+    pace_due: f64,
+    pace_t: Instant,
 }
 
 fn layout_of(scene: &Scene) -> Layout {
@@ -196,7 +202,7 @@ impl Worker {
             out,
             ctx,
             paused: false,
-            speed: Speed::Auto,
+            speed: Speed::Paced,
             time: 0.0,
             dye: vec![0.0; n],
             dye_on: false,
@@ -208,6 +214,8 @@ impl Worker {
             spf: 1,
             ratio: 0.0,
             use_gpu,
+            pace_due: 0.0,
+            pace_t: Instant::now(),
         };
         w.apply_scene(scene, true);
         w
@@ -297,18 +305,6 @@ impl Worker {
                         self.dye_on = enabled;
                     }
                     Cmd::ClearDye => self.dye.iter_mut().for_each(|d| *d = 0.0),
-                    Cmd::Gpu(on) => {
-                        self.use_gpu = on;
-                        if on {
-                            // stan z CPU przechodzi na kartę bez przerywania przepływu
-                            self.lat.enable_gpu();
-                        } else {
-                            self.lat.disable_gpu();
-                            self.time = 0.0;
-                            self.avg = None;
-                        }
-                        self.mlups = 0.0;
-                    }
                 }
                 if self.paused && !step_once {
                     // po zmianie w pauzie od razu pokaż nowy stan
@@ -324,9 +320,20 @@ impl Worker {
                 } else {
                     match self.speed {
                         Speed::Fixed(n) => n.max(1),
-                        Speed::Auto => usize::MAX,
+                        Speed::Max => usize::MAX,
+                        Speed::Paced => {
+                            let now = Instant::now();
+                            let dt = now.duration_since(self.pace_t).as_secs_f64().min(0.1);
+                            self.pace_t = now;
+                            let rate = self.lat.win.w as f64 / (PACE_SECONDS * self.lat.u_lb.max(1e-6) as f64);
+                            self.pace_due += dt * rate;
+                            let n = self.pace_due.floor();
+                            self.pace_due -= n;
+                            n as usize
+                        }
                     }
                 };
+                let budgeted = matches!(self.speed, Speed::Max | Speed::Paced) && !step_once;
                 // porcje kroków aż do wyczerpania budżetu klatki
                 let max_chunk = if self.lat.gpu_name().is_some() { 512 } else { 64 };
                 let mut failed = false;
@@ -340,9 +347,11 @@ impl Worker {
                     done += n;
                     self.time += n as f64 * self.units.dt;
                     let per = ts.elapsed().as_secs_f64() / n as f64;
-                    if self.speed == Speed::Auto && !step_once {
+                    if budgeted {
                         let left = frame_budget.saturating_sub(t0.elapsed()).as_secs_f64();
                         if left < per {
+                            // sprzęt nie nadąża za tempem — bez zaległości, które rosłyby bez końca
+                            self.pace_due = 0.0;
                             break;
                         }
                         steps_hint = ((left / per) as usize).clamp(1, max_chunk);
@@ -353,7 +362,8 @@ impl Worker {
                     done = 0;
                 }
                 if let Some(e) = self.lat.gpu_error.take() {
-                    self.error = Some(format!("Karta graficzna przestała odpowiadać ({e}). Obliczenia przeniesiono na procesor."));
+                    // ciche przejście na procesor — symulacja liczy dalej bez przerwy
+                    log::warn!("karta graficzna przestała odpowiadać ({e}), obliczenia na procesorze");
                     self.use_gpu = false;
                 }
                 if done > 0 {
@@ -374,7 +384,7 @@ impl Worker {
             self.publish();
             // niewielka przerwa, gdy liczenie zajęło mniej niż klatka (tryb stały)
             if let Some(rest) = Duration::from_micros(16_000).checked_sub(t0.elapsed()) {
-                if self.speed != Speed::Auto || self.paused {
+                if self.speed != Speed::Max || self.paused {
                     std::thread::sleep(rest);
                 }
             }
@@ -397,6 +407,16 @@ impl Worker {
         if !self.dye_on {
             return;
         }
+        // podkroki: schemat półlagranżowski jest dokładny tylko dla przesunięć o kilka komórek
+        let mut left = steps;
+        while left > 0 {
+            let k = left.min(8);
+            self.advect_dye_once(k);
+            left -= k;
+        }
+    }
+
+    fn advect_dye_once(&mut self, steps: usize) {
         let (w, h) = (self.lat.win.w, self.lat.win.h);
         let ux = self.lat.visible(&self.lat.ux);
         let uy = self.lat.visible(&self.lat.uy);

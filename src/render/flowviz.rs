@@ -119,16 +119,20 @@ impl Particles {
             let [x, y] = self.pos[i];
             let mut dead = self.age[i] > self.life[i];
             let mut np = [x, y];
-            if !dead {
+            // podkroki punktu środkowego po najwyżej 16 krokach solvera — cząstki nadążają za
+            // przepływem także wtedy, gdy na klatkę przypada wiele kroków (GPU)
+            let subs = (steps / 16.0).ceil().max(1.0);
+            let h = steps / subs;
+            for _ in 0..subs as usize {
+                if dead {
+                    break;
+                }
+                let [x, y] = np;
                 match sample(f, x, y) {
-                    Some((u, v)) => {
-                        let mx = x + 0.5 * u * steps;
-                        let my = y + 0.5 * v * steps;
-                        match sample(f, mx, my) {
-                            Some((u2, v2)) => np = [x + u2 * steps, y + v2 * steps],
-                            None => dead = true,
-                        }
-                    }
+                    Some((u, v)) => match sample(f, x + 0.5 * u * h, y + 0.5 * v * h) {
+                        Some((u2, v2)) => np = [x + u2 * h, y + v2 * h],
+                        None => dead = true,
+                    },
                     None => dead = true,
                 }
             }

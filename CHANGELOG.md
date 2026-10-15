@@ -2,6 +2,15 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/pl/1.1.0/), wersjonowanie: [SemVer](https://semver.org/lang/pl/).
 
+## [1.1.1] — 2026-10-15
+
+### Zmienione
+- Karta graficzna jest używana zawsze, gdy jest dostępna — bez przełącznika w interfejsie. Bez karty albo po błędzie sterownika program po cichu i bez zatrzymywania symulacji liczy na procesorze.
+- Nowe domyślne tempo **Płynne**: strumień przechodzi przez widok w ok. 8 s niezależnie od sprzętu. Na GPU obraz nie pędzi już kilkanaście razy szybciej niż wcześniej. Dotychczasowe tempo bez ograniczeń jest dostępne jako **Maksymalne**.
+
+### Poprawione
+- Cząstki i dym są przesuwane podkrokami, więc nadążają za przepływem także przy setkach kroków solvera na klatkę. Wcześniej cząstki przesuwały się najwyżej o 64 kroki na klatkę i przy szybkim GPU wiry wyprzedzały cząstki.
+
 ## [1.1.0] — 2026-10-15
 
 ### Obliczenia na karcie graficznej

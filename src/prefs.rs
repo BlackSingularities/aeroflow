@@ -7,7 +7,10 @@ use crate::render::field::FieldKind;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SpeedPref {
+    /// Płynne tempo niezależne od sprzętu (domyślne).
     Auto,
+    /// Tak szybko, jak pozwala sprzęt.
+    Max,
     Fixed(usize),
 }
 
@@ -31,8 +34,6 @@ pub struct Prefs {
     pub show_probes: bool,
     pub smoke_rake: bool,
     pub speed: SpeedPref,
-    /// Obliczenia na karcie graficznej (gdy jest dostępna).
-    pub gpu: bool,
     pub brush_cells: f32,
     pub naca: String,
     pub show_side: bool,
@@ -67,7 +68,6 @@ impl Default for Prefs {
             show_probes: true,
             smoke_rake: true,
             speed: SpeedPref::Auto,
-            gpu: true,
             brush_cells: 3.0,
             naca: "2412".into(),
             show_side: true,
