@@ -712,8 +712,14 @@ impl App {
                         self.suppress_undo = true;
                         self.sweep_apply = true;
                     }
-                    if sw.done() {
-                        self.notify("Biegunowa gotowa");
+                    if sw.done() && !sw.finished {
+                        sw.finished = true;
+                        let a = sw.original_angle;
+                        if let Some(b) = self.scene.body_mut(sw.body) {
+                            b.angle = a;
+                        }
+                        self.suppress_undo = true;
+                        self.notify("Biegunowa gotowa — profil wrócił do kąta początkowego");
                     }
                 } else {
                     self.sweep = None;

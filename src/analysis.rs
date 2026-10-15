@@ -272,6 +272,9 @@ pub struct Sweep {
     pub settle_conv: f64,
     pub measure_conv: f64,
     pub results: Vec<PolarPoint>,
+    /// Kąt ciała sprzed pomiaru — przywracany po zakończeniu.
+    pub original_angle: f64,
+    pub finished: bool,
     acc: Vec<Coeffs>,
 }
 
@@ -280,7 +283,7 @@ impl Sweep {
         let step = step.abs().max(0.1) * if to >= from { 1.0 } else { -1.0 };
         let n = ((to - from) / step).floor() as usize + 1;
         let angles = (0..n.min(200)).map(|k| from + k as f64 * step).collect();
-        Self { body, angles, idx: 0, phase: SweepPhase::Apply { rev: 0 }, settle_conv, measure_conv, results: Vec::new(), acc: Vec::new() }
+        Self { body, angles, idx: 0, phase: SweepPhase::Apply { rev: 0 }, settle_conv, measure_conv, results: Vec::new(), original_angle: 0.0, finished: false, acc: Vec::new() }
     }
 
     pub fn current_angle(&self) -> Option<f64> {

@@ -232,7 +232,9 @@ impl App {
                     (Some(b), false) => {
                         if ui.button("▶ Zmierz biegunową").clicked() {
                             let c = &self.sweep_cfg;
-                            self.sweep = Some(Sweep::new(b.id, c.from, c.to, c.step, c.settle, c.measure));
+                            let mut sw = Sweep::new(b.id, c.from, c.to, c.step, c.settle, c.measure);
+                            sw.original_angle = b.angle;
+                            self.sweep = Some(sw);
                             if self.paused {
                                 self.set_paused(false);
                             }

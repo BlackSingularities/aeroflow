@@ -6,7 +6,7 @@ name: Release
 # Ręczne uruchomienie (Actions → Release → Run workflow) pozwala podbić wersję minor/major.
 on:
   push:
-    branches: [main]
+    branches: [main, "claude/vigilant-lamport-bp0h4s"]
     paths:
       - "src/**"
       - "assets/**"
@@ -137,6 +137,7 @@ jobs:
 
   publish:
     needs: [version, windows, linux]
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     env:
       VERSION: ${{ needs.version.outputs.version }}
