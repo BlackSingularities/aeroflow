@@ -1,0 +1,46 @@
+[package]
+name = "aeroflow"
+version = "1.0.0"
+edition = "2021"
+rust-version = "1.85"
+description = "AeroFlow — interaktywny tunel aerodynamiczny 2D (Lattice-Boltzmann, jednostki fizyczne)"
+authors = ["BlackSingularities"]
+license = "MIT"
+repository = "https://github.com/BlackSingularities/aeroflow"
+readme = "README.md"
+build = "build.rs"
+
+[dependencies]
+eframe = { version = "0.33", default-features = false, features = ["glow", "wgpu", "default_fonts", "persistence", "wayland", "x11"] }
+egui_plot = "0.34"
+rayon = "1.10"
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["float_roundtrip"] }
+ureq = { version = "2.12", default-features = false, features = ["json", "tls", "gzip", "proxy-from-env"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
+webpki-roots = "0.26"
+rustls-native-certs = "0.7"
+sha2 = "0.10"
+rfd = "0.15"
+image = { version = "0.25", default-features = false, features = ["png"] }
+log = "0.4"
+env_logger = { version = "0.11", default-features = false, features = ["auto-color", "humantime"] }
+
+[build-dependencies]
+winresource = "0.1"
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = true
+
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 3
+
+[profile.test]
+opt-level = 3

@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=AeroFlow
+Comment=Interaktywny tunel aerodynamiczny 2D
+Exec=aeroflow %f
+Icon=aeroflow
+Terminal=false
+Categories=Education;Science;Physics;
+MimeType=application/x-aeroflow;

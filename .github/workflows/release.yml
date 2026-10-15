@@ -1,0 +1,181 @@
+name: Release
+
+# Każdy push do main, który zmienia program, publikuje nowe wydanie:
+# - jeśli wersja z Cargo.toml nie ma jeszcze tagu — wydawana jest dokładnie ta wersja,
+# - w przeciwnym razie numer poprawki jest zwiększany automatycznie (1.0.0 → 1.0.1 → …).
+# Ręczne uruchomienie (Actions → Release → Run workflow) pozwala podbić wersję minor/major.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "src/**"
+      - "assets/**"
+      - "installer/**"
+      - "build.rs"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "CHANGELOG.md"
+      - ".github/workflows/release.yml"
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: "Podbicie wersji"
+        type: choice
+        options: [auto, patch, minor, major]
+        default: auto
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    uses: ./.github/workflows/ci.yml
+
+  version:
+    needs: test
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+      previous: ${{ steps.v.outputs.previous }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: v
+        shell: bash
+        run: |
+          set -euo pipefail
+          base=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
+          last=$(git tag -l 'v[0-9]*' | sed 's/^v//' | sort -V | tail -n1)
+          bump="${{ github.event.inputs.bump || 'auto' }}"
+          newest=$(printf '%s\n%s\n' "$base" "${last:-0.0.0}" | sort -V | tail -n1)
+          IFS=. read -r MA MI PA <<< "$newest"
+          if [ "$bump" = "auto" ]; then
+            if ! git rev-parse -q --verify "refs/tags/v$base" >/dev/null && [ "$newest" = "$base" ]; then
+              version="$base"
+            else
+              version="$MA.$MI.$((PA + 1))"
+            fi
+          elif [ "$bump" = "patch" ]; then version="$MA.$MI.$((PA + 1))"
+          elif [ "$bump" = "minor" ]; then version="$MA.$((MI + 1)).0"
+          else version="$((MA + 1)).0.0"
+          fi
+          echo "Poprzednia: ${last:-brak}, Cargo.toml: $base → wydanie: $version"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "previous=${last:-}" >> "$GITHUB_OUTPUT"
+
+  windows:
+    needs: version
+    runs-on: windows-latest
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Ustaw wersję
+        shell: bash
+        run: sed -i "0,/^version = .*/s//version = \"$VERSION\"/" Cargo.toml
+      - name: Kompilacja
+        run: cargo build --release
+      - name: Instalator (Inno Setup)
+        shell: pwsh
+        run: |
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          choco upgrade innosetup -y --no-progress | Out-Null
+          & $iscc /Qp "/DAppVersion=$env:VERSION" installer\aeroflow.iss
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Wersja przenośna i sumy kontrolne
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist/portable | Out-Null
+          Copy-Item target/release/aeroflow.exe, README.md, CHANGELOG.md, LICENSE dist/portable/
+          Compress-Archive -Path dist/portable/* -DestinationPath "dist/AeroFlow-$env:VERSION-windows-x64-portable.zip"
+          Remove-Item -Recurse dist/portable
+          Get-ChildItem dist -File | ForEach-Object {
+            $h = (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower()
+            [IO.File]::WriteAllText("$($_.FullName).sha256", "$h  $($_.Name)`n")
+          }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: dist/*
+
+  linux:
+    needs: version
+    runs-on: ubuntu-22.04
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Ustaw wersję
+        run: sed -i "0,/^version = .*/s//version = \"$VERSION\"/" Cargo.toml
+      - name: Kompilacja
+        run: cargo build --release
+      - name: Paczka
+        run: |
+          d="AeroFlow-$VERSION-linux-x64"
+          mkdir -p "dist/$d"
+          cp target/release/aeroflow README.md CHANGELOG.md LICENSE assets/aeroflow.desktop "dist/$d/"
+          cp assets/icon.png "dist/$d/aeroflow.png"
+          tar -C dist -czf "dist/$d.tar.gz" "$d"
+          rm -rf "dist/$d"
+          (cd dist && sha256sum "$d.tar.gz" > "$d.tar.gz.sha256")
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux
+          path: dist/*
+
+  publish:
+    needs: [version, windows, linux]
+    runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+      PREVIOUS: ${{ needs.version.outputs.previous }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Opis wydania
+        shell: bash
+        run: |
+          set -euo pipefail
+          section=$(awk -v v="$VERSION" 'index($0, "## [" v "]") == 1 { f = 1; next } /^## / { if (f) exit } f' CHANGELOG.md)
+          {
+            if [ -n "$section" ]; then
+              echo "$section"
+            else
+              echo "### Zmiany"
+              if [ -n "$PREVIOUS" ]; then range="v$PREVIOUS..HEAD"; else range="HEAD"; fi
+              git log --no-merges --pretty='- %s' $range | head -n 60
+            fi
+            echo
+            echo "### Instalacja"
+            echo "- **Windows:** pobierz \`AeroFlow-Setup-$VERSION.exe\` i uruchom. Zainstalowany program sam powiadamia o kolejnych wersjach i aktualizuje się jednym kliknięciem."
+            echo "- **Windows (bez instalacji):** \`AeroFlow-$VERSION-windows-x64-portable.zip\`."
+            echo "- **Linux:** \`AeroFlow-$VERSION-linux-x64.tar.gz\`."
+            echo
+            echo "Sumy SHA-256 znajdują się w plikach \`.sha256\`."
+          } > notes.md
+          cat notes.md
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ env.VERSION }}
+          target_commitish: ${{ github.sha }}
+          name: AeroFlow ${{ env.VERSION }}
+          body_path: notes.md
+          files: dist/*
+          make_latest: true
