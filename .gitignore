@@ -1,3 +1,8 @@
 /target/
 /dist/
 *.pdb
+__pycache__/
+node_modules/
+*.tsbuildinfo
+/web/dist/
+.claude/
