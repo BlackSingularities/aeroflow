@@ -71,6 +71,18 @@ impl App {
                         ui.ctx().open_url(egui::OpenUrl::new_tab(update::releases_url()));
                     }
                     ui.label(RichText::new("Licencja MIT").small().color(theme::TEXT_DIM));
+                    ui.add_space(8.0);
+                    ui.horizontal(|ui| {
+                        ui.label(RichText::new("Projekt i wykonanie:").color(theme::TEXT_DIM));
+                        if ui.link("redzikowski.com").clicked() {
+                            ui.ctx().open_url(egui::OpenUrl::new_tab("https://redzikowski.com"));
+                        }
+                    });
+                    ui.add_space(4.0);
+                    let coffee = egui::Button::new(RichText::new("☕ Postaw kawę").strong().color(theme::BG)).fill(theme::ACCENT);
+                    if ui.add(coffee).clicked() {
+                        ui.ctx().open_url(egui::OpenUrl::new_tab("https://buycoffee.to/adamredzikowski"));
+                    }
                 });
             });
         self.win.about = open;
