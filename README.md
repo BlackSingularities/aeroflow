@@ -9,26 +9,17 @@ która mówi wprost, czy przy danej rozdzielczości i liczbie Reynoldsa jest ilo
 
 ## Instalacja
 
-Pobierz najnowsze wydanie ze strony [Releases](https://github.com/BlackSingularities/aeroflow/releases):
-
-| Plik | Opis |
-| --- | --- |
-| `AeroFlow-Setup-X.Y.Z.exe` | instalator Windows (menu Start, skrót, skojarzenie plików `.aeroflow`, deinstalator) |
-| `AeroFlow-X.Y.Z-windows-x64-portable.exe` | wersja przenośna — jeden plik, bez instalacji |
-| `AeroFlow-X.Y.Z-linux-x64.tar.gz` | Linux x64 |
-
-Instalator domyślnie instaluje program dla bieżącego użytkownika (bez uprawnień administratora), więc aktualizacje nie wymagają potwierdzania UAC.
-Wersja przenośna to jeden plik `.exe` — wystarczy go uruchomić.
+Pobierz instalator `AeroFlow-Setup-X.Y.Z.exe` ze strony [redzikowski.com/portfolio/aeroflow](https://redzikowski.com/portfolio/aeroflow) i uruchom go.
+Program instaluje się w `Program Files` (menu Start, skrót, skojarzenie plików `.aeroflow`, deinstalator), więc instalator prosi o zgodę administratora.
 Plik nie jest podpisany certyfikatem, dlatego przy pierwszym uruchomieniu Windows SmartScreen może pokazać ostrzeżenie („Więcej informacji → Uruchom mimo to”).
 
 ### Aktualizacje
 
-Przy starcie program sprawdza w tle najnowsze wydanie na GitHubie. Gdy jest nowsza wersja, pojawia się pasek z informacją, opisem zmian
-i przyciskiem **Pobierz i zainstaluj**: instalator jest pobierany, weryfikowany sumą SHA-256, a program zamyka się, aktualizuje i uruchamia ponownie
-(niezapisana scena jest przywracana). Po aktualizacji wyświetla się okno „Co nowego”. Sprawdzanie można wyłączyć w menu *Pomoc*.
-
-> Sprawdzanie aktualizacji korzysta z publicznego API GitHub Releases — działa, gdy repozytorium (lub repozytorium z wydaniami
-> wskazane przy kompilacji zmienną `AEROFLOW_UPDATE_REPO=właściciel/repo`) jest publiczne.
+Przy starcie program sprawdza w tle najnowsze wydanie na redzikowski.com. Gdy jest nowsza wersja, pojawia się pasek z informacją, opisem zmian
+i przyciskiem **Pobierz i zainstaluj**: instalator jest pobierany i weryfikowany sumą SHA-256, a potem uruchamiany po cichu — bez okna instalatora,
+w folderze poprzedniej instalacji. Windows prosi o zgodę administratora, program zamyka się, aktualizuje i uruchamia ponownie
+(niezapisana scena jest przywracana). Gdy zgoda zostanie odrzucona, program zostaje otwarty i pokazuje komunikat.
+Po aktualizacji wyświetla się okno „Co nowego”. Sprawdzanie można wyłączyć w menu *Pomoc*.
 
 ## Interfejs
 

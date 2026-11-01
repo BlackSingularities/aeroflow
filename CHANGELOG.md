@@ -2,6 +2,14 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/pl/1.1.0/), wersjonowanie: [SemVer](https://semver.org/lang/pl/).
 
+## [1.2.0] — 2026-11-02
+
+### Zmienione
+- Program instaluje się w Program Files dla wszystkich użytkowników; instalator prosi o zgodę administratora. Starsza kopia zainstalowana tylko dla bieżącego użytkownika jest usuwana automatycznie.
+- Aktualizacje są pobierane z redzikowski.com. Instalacja odbywa się po cichu, bez okna instalatora, w folderze poprzedniej instalacji — Windows prosi o zgodę administratora, gdy jest potrzebna.
+- Jeśli zgoda administratora zostanie odrzucona, program zostaje otwarty i pokazuje komunikat zamiast zamykać się bez aktualizacji.
+- Wydania zawierają tylko instalator Windows.
+
 ## [1.1.1] — 2026-10-15
 
 ### Zmienione

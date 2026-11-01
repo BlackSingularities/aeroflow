@@ -1,5 +1,5 @@
-//! Aktualizacje: sprawdzanie najnowszego wydania na GitHubie, pobieranie instalatora
-//! z weryfikacją SHA-256 i uruchomienie go (Windows) albo otwarcie strony wydania.
+//! Aktualizacje: sprawdzanie najnowszego wydania na redzikowski.com, pobieranie instalatora
+//! z weryfikacją SHA-256 i uruchomienie go (Windows) albo otwarcie strony programu.
 
 use std::io::{Read, Write};
 use std::path::PathBuf;
@@ -17,8 +17,11 @@ pub const REPO: &str = match option_env!("AEROFLOW_UPDATE_REPO") {
 /// Wersja programu (w wydaniach ustawiana przez CI).
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
+/// Serwer z kopią wydań w formacie API GitHuba – pliki pobierane są z redzikowski.com.
+const UPDATE_HOST: &str = "https://redzikowski.com";
+
 pub fn releases_url() -> String {
-    format!("https://github.com/{REPO}/releases")
+    format!("{UPDATE_HOST}/portfolio/aeroflow")
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -94,6 +97,7 @@ pub enum State {
     Available(Release),
     Downloading { release: Release, done: u64, total: u64 },
     Ready { release: Release, path: PathBuf },
+    Installing { release: Release },
     Failed { message: String, manual: bool },
 }
 
@@ -155,7 +159,7 @@ impl Updater {
     }
 
     pub fn busy(&self) -> bool {
-        matches!(self.state(), State::Checking | State::Downloading { .. })
+        matches!(self.state(), State::Checking | State::Downloading { .. } | State::Installing { .. })
     }
 
     /// Sprawdza najnowsze wydanie w tle.
@@ -202,14 +206,14 @@ impl Updater {
 }
 
 fn fetch_latest() -> Result<Option<Release>, String> {
-    let url = format!("https://api.github.com/repos/{REPO}/releases?per_page=10");
+    let url = format!("{UPDATE_HOST}/api/github/repos/{REPO}/releases?per_page=10");
     let resp = agent().get(&url).set("Accept", "application/vnd.github+json").call().map_err(|e| match e {
-        ureq::Error::Status(404, _) => "Nie znaleziono wydań (repozytorium prywatne lub brak publikacji).".to_string(),
-        ureq::Error::Status(403, _) => "Przekroczono limit zapytań GitHub — spróbuj później.".to_string(),
+        ureq::Error::Status(404, _) => "Nie znaleziono wydań programu.".to_string(),
+        ureq::Error::Status(403, _) => "Serwer aktualizacji odmówił dostępu — spróbuj później.".to_string(),
         ureq::Error::Status(c, _) => format!("Serwer zwrócił kod {c}."),
         ureq::Error::Transport(t) => match t.kind() {
             ureq::ErrorKind::Dns | ureq::ErrorKind::ConnectionFailed | ureq::ErrorKind::Io => {
-                "Brak połączenia z GitHub — sprawdź dostęp do internetu.".to_string()
+                "Brak połączenia z redzikowski.com — sprawdź dostęp do internetu.".to_string()
             }
             _ => format!("Błąd połączenia: {}", t.message().unwrap_or("nieznany")),
         },
@@ -288,15 +292,40 @@ fn download_file(asset: &Asset, release: &Release, progress: impl Fn(u64, u64)) 
     Ok(path)
 }
 
-/// Uruchamia instalator w trybie cichym (z ponownym uruchomieniem programu po instalacji).
-pub fn launch_installer(path: &std::path::Path) -> Result<(), String> {
+/// Uruchamia instalator w trybie cichym, bez okna. Instalator sam prosi o uprawnienia
+/// administratora, gdy są potrzebne, instaluje do folderu poprzedniej instalacji, zamyka
+/// program i uruchamia nową wersję. Gdy okno UAC zostanie odrzucone albo instalacja się
+/// nie powiedzie, program zostaje otwarty, a wynik trafia do okna aktualizacji.
+impl Updater {
+    pub fn install(&self, release: Release, path: PathBuf, ctx: &eframe::egui::Context) {
+        self.set(State::Installing { release: release.clone() }, ctx);
+        let me = self.clone();
+        let ctx = ctx.clone();
+        std::thread::spawn(move || {
+            if let Err(message) = run_installer(&path) {
+                me.set(State::Failed { message, manual: true }, &ctx);
+            }
+        });
+    }
+}
+
+fn run_installer(path: &std::path::Path) -> Result<(), String> {
     #[cfg(windows)]
     {
-        std::process::Command::new(path)
-            .args(["/SILENT", "/SP-", "/NOCANCEL", "/SUPPRESSMSGBOXES", "/RELAUNCH=1"])
-            .spawn()
-            .map(|_| ())
-            .map_err(|e| format!("Nie można uruchomić instalatora: {e}"))
+        let log = path.with_extension("log");
+        let status = std::process::Command::new(path)
+            .args(["/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/SP-", "/RELAUNCH=1"])
+            .arg(format!("/LOG={}", log.display()))
+            .status()
+            .map_err(|e| format!("Nie można uruchomić instalatora: {e}"))?;
+        match status.code() {
+            Some(0) => Ok(()),
+            Some(code) => Err(format!(
+                "Aktualizacja nie została zainstalowana — wymaga zgody administratora (kod {code}). Dziennik: {}",
+                log.display()
+            )),
+            None => Err("Instalator został przerwany.".into()),
+        }
     }
     #[cfg(not(windows))]
     {

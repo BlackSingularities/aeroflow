@@ -67,7 +67,7 @@ impl App {
                     ui.label("Lattice-Boltzmann D2Q9 · LES Smagorinsky · odbicie Bouzidiego");
                     ui.label(RichText::new(format!("{} rdzeni procesora", rayon::current_num_threads())).color(theme::TEXT_DIM));
                     ui.add_space(6.0);
-                    if ui.link("Strona projektu i wydania").clicked() {
+                    if ui.link("Strona programu").clicked() {
                         ui.ctx().open_url(egui::OpenUrl::new_tab(update::releases_url()));
                     }
                     ui.label(RichText::new("Licencja MIT").small().color(theme::TEXT_DIM));
@@ -162,7 +162,7 @@ impl App {
                             if ui.button("Spróbuj ponownie").clicked() {
                                 self.updater.check(true, ui.ctx());
                             }
-                            if ui.button("Otwórz stronę wydań").clicked() {
+                            if ui.button("Otwórz stronę programu").clicked() {
                                 ui.ctx().open_url(egui::OpenUrl::new_tab(update::releases_url()));
                             }
                         });
@@ -209,15 +209,18 @@ impl App {
                     State::Ready { release, path } => {
                         ui.label(RichText::new(format!("✔ Pobrano i zweryfikowano {}.", release.title)).color(theme::GOOD));
                         ui.label(
-                            "Program zamknie się, zainstaluje aktualizację i uruchomi ponownie. Niezapisana scena zostanie przywrócona.",
+                            "Program zamknie się, zainstaluje aktualizację w tym samym folderze i uruchomi ponownie. Niezapisana scena zostanie przywrócona. Jeśli program jest zainstalowany dla wszystkich użytkowników, Windows poprosi o zgodę administratora.",
                         );
                         if ui.button(RichText::new("Zainstaluj teraz").strong()).clicked() {
                             self.prefs.update_notes = Some((release.version.to_string(), release.notes.clone()));
-                            match update::launch_installer(&path) {
-                                Ok(()) => ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close),
-                                Err(e) => self.notify(e),
-                            }
+                            self.updater.install(release.clone(), path.clone(), ui.ctx());
                         }
+                    }
+                    State::Installing { release } => {
+                        ui.horizontal(|ui| {
+                            ui.spinner();
+                            ui.label(format!("Instalowanie {}… Potwierdź zgodę administratora, jeśli Windows o nią poprosi.", release.title));
+                        });
                     }
                 }
             });

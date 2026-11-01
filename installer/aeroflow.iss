@@ -1,22 +1,24 @@
-; Instalator AeroFlow (Inno Setup 6). Budowany automatycznie w GitHub Actions:
+﻿; Instalator AeroFlow (Inno Setup 6). Budowany automatycznie w GitHub Actions:
 ;   ISCC.exe /DAppVersion=1.2.3 installer\aeroflow.iss
+; Instalacja do Program Files z uprawnieniami administratora (UAC). Aktualizacja z programu
+; uruchamia ten sam instalator po cichu – trafia do folderu poprzedniej instalacji.
 
 #define AppName "AeroFlow"
 #ifndef AppVersion
   #define AppVersion "1.0.0"
 #endif
 #define AppExe "aeroflow.exe"
-#define AppUrl "https://github.com/BlackSingularities/aeroflow"
+#define AppUrl "https://redzikowski.com/portfolio/aeroflow"
 
 [Setup]
 AppId={{8C3A6F1E-5B7D-4E2A-9F41-AE20F10A7A11}
 AppName={#AppName}
 AppVersion={#AppVersion}
 AppVerName={#AppName} {#AppVersion}
-AppPublisher=BlackSingularities
+AppPublisher=Adam Rędzikowski
 AppPublisherURL={#AppUrl}
-AppSupportURL={#AppUrl}/issues
-AppUpdatesURL={#AppUrl}/releases
+AppSupportURL=https://redzikowski.com
+AppUpdatesURL={#AppUrl}
 DefaultDirName={autopf}\{#AppName}
 DefaultGroupName={#AppName}
 DisableProgramGroupPage=yes
@@ -31,12 +33,10 @@ SolidCompression=yes
 WizardStyle=modern
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
-; instalacja dla bieżącego użytkownika nie wymaga uprawnień administratora — aktualizacje
-; instalują się bez okna UAC; przy pierwszej instalacji można wybrać instalację dla wszystkich
-PrivilegesRequired=lowest
-PrivilegesRequiredOverridesAllowed=dialog
-UsePreviousPrivileges=yes
-CloseApplications=yes
+PrivilegesRequired=admin
+UsePreviousAppDir=yes
+SetupLogging=yes
+CloseApplications=force
 RestartApplications=no
 ChangesAssociations=yes
 LicenseFile=..\LICENSE
@@ -78,12 +78,35 @@ Root: HKA; Subkey: "Software\Classes\AeroFlow.Scene\shell\open\command"; ValueTy
 
 [Run]
 ; instalacja ręczna: pole „Uruchom AeroFlow” na ostatniej stronie
-Filename: "{app}\{#AppExe}"; Description: "{cm:LaunchProgram,{#AppName}}"; Flags: nowait postinstall skipifsilent
-; aktualizacja z programu (tryb cichy z /RELAUNCH=1): ponowne uruchomienie
-Filename: "{app}\{#AppExe}"; Flags: nowait; Check: ShouldRelaunch
+Filename: "{app}\{#AppExe}"; Description: "{cm:LaunchProgram,{#AppName}}"; Flags: nowait postinstall skipifsilent runasoriginaluser
+; aktualizacja z programu (tryb cichy z /RELAUNCH=1): ponowne uruchomienie jako zwykły użytkownik
+Filename: "{app}\{#AppExe}"; Flags: nowait runasoriginaluser; Check: ShouldRelaunch
 
 [Code]
+const
+  OldKey = 'Software\Microsoft\Windows\CurrentVersion\Uninstall\{8C3A6F1E-5B7D-4E2A-9F41-AE20F10A7A11}_is1';
+
 function ShouldRelaunch: Boolean;
 begin
   Result := WizardSilent and (ExpandConstant('{param:RELAUNCH|0}') = '1');
+end;
+
+// Wersje do 1.1.2 instalowały się domyślnie dla bieżącego użytkownika (wpis w HKCU) – usuwamy
+// taką kopię, żeby po przejściu do Program Files nie zostały dwa programy.
+procedure RemoveOldPerUserCopy();
+var
+  Uninst: String;
+  Code: Integer;
+begin
+  if RegQueryStringValue(HKCU, OldKey, 'UninstallString', Uninst) then
+  begin
+    Exec(RemoveQuotes(Uninst), '/VERYSILENT /SUPPRESSMSGBOXES /NORESTART', '', SW_HIDE, ewWaitUntilTerminated, Code);
+    RegDeleteKeyIncludingSubkeys(HKCU, OldKey);
+  end;
+end;
+
+procedure CurStepChanged(CurStep: TSetupStep);
+begin
+  if CurStep = ssInstall then
+    RemoveOldPerUserCopy();
 end;
