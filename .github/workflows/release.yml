@@ -1,20 +1,12 @@
 name: Release
 
-# Każdy push do main, który zmienia program, publikuje nowe wydanie:
-# - jeśli wersja z Cargo.toml nie ma jeszcze tagu — wydawana jest dokładnie ta wersja,
-# - w przeciwnym razie numer poprawki jest zwiększany automatycznie (1.0.0 → 1.0.1 → …).
-# Ręczne uruchomienie (Actions → Release → Run workflow) pozwala podbić wersję minor/major.
+# Wydanie powstaje tylko z tagu: `git tag v1.2.3 && git push origin v1.2.3`
+# publikuje dokładnie tę wersję. Push do main niczego nie wydaje.
+# Ręczne uruchomienie (Actions → Release → Run workflow) podbija wersję automatycznie
+# (auto/patch/minor/major) i tworzy tag przy publikacji.
 on:
   push:
-    branches: [main]
-    paths:
-      - "src/**"
-      - "assets/**"
-      - "installer/**"
-      - "build.rs"
-      - "Cargo.toml"
-      - "Cargo.lock"
-      - "CHANGELOG.md"
+    tags: ["v*"]
   workflow_dispatch:
     inputs:
       bump:
@@ -51,6 +43,14 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          if [ "${{ github.ref_type }}" = "tag" ]; then
+            version="${GITHUB_REF_NAME#v}"
+            last=$(git tag -l 'v[0-9]*' | sed 's/^v//' | grep -vxF "$version" | sort -V | tail -n1 || true)
+            echo "Tag v$version → wydanie: $version"
+            echo "version=$version" >> "$GITHUB_OUTPUT"
+            echo "previous=${last:-}" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           base=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
           last=$(git tag -l 'v[0-9]*' | sed 's/^v//' | sort -V | tail -n1)
           bump="${{ github.event.inputs.bump || 'auto' }}"
