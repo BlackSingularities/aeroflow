@@ -60,9 +60,6 @@ struct GhAsset {
 struct GhRelease {
     tag_name: String,
     name: Option<String>,
-    body: Option<String>,
-    html_url: String,
-    published_at: Option<String>,
     #[serde(default)]
     draft: bool,
     #[serde(default)]
@@ -82,9 +79,7 @@ pub struct Asset {
 pub struct Release {
     pub version: Version,
     pub title: String,
-    pub notes: String,
     pub url: String,
-    pub date: String,
     pub installer: Option<Asset>,
     pub checksum: Option<Asset>,
 }
@@ -240,9 +235,7 @@ fn fetch_latest() -> Result<Option<Release>, String> {
         Release {
             title: r.name.clone().filter(|n| !n.trim().is_empty()).unwrap_or_else(|| format!("AeroFlow {version}")),
             version,
-            notes: r.body.unwrap_or_default(),
-            url: r.html_url,
-            date: r.published_at.map(|d| d.chars().take(10).collect()).unwrap_or_default(),
+            url: releases_url(),
             installer,
             checksum,
         }
@@ -333,22 +326,6 @@ fn run_installer(path: &std::path::Path) -> Result<(), String> {
     }
 }
 
-/// Sekcja „Co nowego” dla danej wersji z dołączonego CHANGELOG.md.
-pub fn changelog_section(version: &str) -> Option<String> {
-    let text = include_str!("../CHANGELOG.md");
-    let head = format!("## [{version}]");
-    let start = text.find(&head)?;
-    let rest = &text[start + head.len()..];
-    let body_start = rest.find('\n').map(|i| i + 1).unwrap_or(rest.len());
-    let rest = &rest[body_start..];
-    let end = rest.find("\n## ").unwrap_or(rest.len());
-    Some(rest[..end].trim().to_string())
-}
-
-pub fn changelog() -> &'static str {
-    include_str!("../CHANGELOG.md")
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -359,10 +336,5 @@ mod tests {
         assert_eq!(Version::parse("v2.0"), Some(Version(2, 0, 0)));
         assert_eq!(Version::parse("1.2.3-beta"), Some(Version(1, 2, 3)));
         assert!(Version::parse("abc").is_none());
-    }
-
-    #[test]
-    fn changelog_has_current_version() {
-        assert!(changelog_section(VERSION).is_some(), "CHANGELOG.md nie ma sekcji ## [{VERSION}]");
     }
 }

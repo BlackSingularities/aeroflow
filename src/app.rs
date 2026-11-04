@@ -138,8 +138,6 @@ pub struct Windows {
     pub shortcuts: bool,
     pub physics: bool,
     pub update: bool,
-    pub whats_new: Option<String>,
-    pub changelog: bool,
 }
 
 /// Parametry uruchomienia z wiersza poleceń.
@@ -256,18 +254,9 @@ impl App {
         if prefs.check_updates {
             updater.check(false, &cc.egui_ctx);
         }
-        let mut win = Windows::default();
-        let current = update::VERSION.to_string();
-        if !prefs.last_version.is_empty() && prefs.last_version != current && launch.capture.is_none() {
-            let notes = prefs.update_notes.take().filter(|(v, n)| *v == current && !n.trim().is_empty()).map(|(_, n)| n);
-            win.whats_new = Some(
-                notes
-                    .or_else(|| update::changelog_section(&current))
-                    .unwrap_or_else(|| "Program został zaktualizowany do najnowszej wersji.".into()),
-            );
-        }
+        let win = Windows::default();
         prefs.update_notes = None;
-        prefs.last_version = current;
+        prefs.last_version = update::VERSION.to_string();
         let n_probes = scene.probes.len();
         let saved_scene = if file_path.is_some() { scene.clone() } else { Scene::default() };
 

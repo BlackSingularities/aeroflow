@@ -102,31 +102,6 @@ impl App {
         );
         self.win.physics = open;
 
-        let mut open = self.win.changelog;
-        egui::Window::new("Historia zmian").open(&mut open).default_width(560.0).default_height(520.0).vscroll(true).show(ctx, |ui| {
-            markdown(ui, update::changelog());
-        });
-        self.win.changelog = open;
-
-        if let Some(text) = self.win.whats_new.clone() {
-            let mut open = true;
-            egui::Window::new(format!("Co nowego w wersji {}", update::VERSION))
-                .open(&mut open)
-                .collapsible(false)
-                .default_width(520.0)
-                .anchor(Align2::CENTER_CENTER, [0.0, 0.0])
-                .show(ctx, |ui| {
-                    egui::ScrollArea::vertical().max_height(420.0).show(ui, |ui| markdown(ui, &text));
-                    ui.separator();
-                    if ui.button("Świetnie!").clicked() {
-                        self.win.whats_new = None;
-                    }
-                });
-            if !open {
-                self.win.whats_new = None;
-            }
-        }
-
         self.update_window(ctx);
     }
 
@@ -164,25 +139,12 @@ impl App {
                     }
                     State::Failed { message, .. } => {
                         ui.label(RichText::new(format!("Nie udało się: {message}")).color(theme::WARN));
-                        ui.horizontal(|ui| {
-                            if ui.button("Spróbuj ponownie").clicked() {
-                                self.updater.check(true, ui.ctx());
-                            }
-                            if ui.button("Otwórz stronę programu").clicked() {
-                                ui.ctx().open_url(egui::OpenUrl::new_tab(update::releases_url()));
-                            }
-                        });
+                        if ui.button("Spróbuj ponownie").clicked() {
+                            self.updater.check(true, ui.ctx());
+                        }
                     }
                     State::Available(r) => {
-                        ui.label(RichText::new(format!("{} — {}", r.title, r.date)).strong().size(15.0));
-                        ui.add_space(4.0);
-                        egui::ScrollArea::vertical().max_height(300.0).show(ui, |ui| {
-                            if r.notes.trim().is_empty() {
-                                ui.label(RichText::new("Brak opisu zmian.").color(theme::TEXT_DIM));
-                            } else {
-                                markdown(ui, &r.notes);
-                            }
-                        });
+                        ui.label(RichText::new(format!("Dostępna jest nowa wersja {}.", r.version)).strong().size(15.0));
                         ui.separator();
                         ui.horizontal(|ui| {
                             let can_install = cfg!(windows) && r.installer.is_some();
@@ -191,8 +153,6 @@ impl App {
                                 if ui.button(RichText::new(format!("⬇ Pobierz i zainstaluj ({size:.1} MB)")).strong()).clicked() {
                                     self.updater.download(r.clone(), ui.ctx());
                                 }
-                            } else if ui.button("Otwórz stronę wydania").clicked() {
-                                ui.ctx().open_url(egui::OpenUrl::new_tab(&r.url));
                             }
                             if ui.button("Pomiń tę wersję").clicked() {
                                 self.prefs.skipped_version = r.version.to_string();
@@ -218,7 +178,6 @@ impl App {
                             "Program zamknie się, zainstaluje aktualizację w tym samym folderze i uruchomi ponownie. Niezapisana scena zostanie przywrócona. Jeśli program jest zainstalowany dla wszystkich użytkowników, Windows poprosi o zgodę administratora.",
                         );
                         if ui.button(RichText::new("Zainstaluj teraz").strong()).clicked() {
-                            self.prefs.update_notes = Some((release.version.to_string(), release.notes.clone()));
                             self.updater.install(release.clone(), path.clone(), ui.ctx());
                         }
                     }
@@ -368,12 +327,11 @@ impl App {
         if esc {
             if self.hide_ui {
                 self.hide_ui = false;
-            } else if self.win.shortcuts || self.win.about || self.win.physics || self.win.update || self.win.changelog {
+            } else if self.win.shortcuts || self.win.about || self.win.physics || self.win.update {
                 self.win.shortcuts = false;
                 self.win.about = false;
                 self.win.physics = false;
                 self.win.update = false;
-                self.win.changelog = false;
             } else {
                 self.selected = None;
                 self.drag = None;

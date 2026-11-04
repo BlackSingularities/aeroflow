@@ -327,10 +327,6 @@ impl App {
             self.win.physics = true;
             ui.close();
         }
-        if ui.button("Historia zmian").clicked() {
-            self.win.changelog = true;
-            ui.close();
-        }
         ui.separator();
         if ui.button("Sprawdź aktualizacje").clicked() {
             self.updater.check(true, ui.ctx());
@@ -338,10 +334,6 @@ impl App {
             ui.close();
         }
         ui.checkbox(&mut self.prefs.check_updates, "Sprawdzaj przy starcie");
-        if ui.button("Strona wydań").clicked() {
-            ui.ctx().open_url(egui::OpenUrl::new_tab(update::releases_url()));
-            ui.close();
-        }
         if ui.button("O programie").clicked() {
             self.win.about = true;
             ui.close();
@@ -381,7 +373,7 @@ impl App {
                         RichText::new(format!("Dostępna jest nowa wersja AeroFlow {} (masz {}).", r.version, update::VERSION))
                             .color(theme::TEXT),
                     );
-                    if ui.button("Co nowego i instalacja").clicked() {
+                    if ui.button("Aktualizuj").clicked() {
                         self.win.update = true;
                     }
                     if ui.button("Pomiń tę wersję").clicked() {
