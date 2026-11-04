@@ -2,6 +2,10 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/pl/1.1.0/), wersjonowanie: [SemVer](https://semver.org/lang/pl/).
 
+## [1.2.2] — 2026-11-04
+
+- Bez żadnych wzmianek o GitHubie w aplikacji: nowy adres serwera aktualizacji, komunikaty błędów bez nazw zewnętrznych serwerów.
+
 ## [1.2.1] — 2026-11-04
 
 - Komunikat o nowej wersji bez listy zmian, linków i informacji, skąd pobierana jest aktualizacja.

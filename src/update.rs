@@ -201,8 +201,8 @@ impl Updater {
 }
 
 fn fetch_latest() -> Result<Option<Release>, String> {
-    let url = format!("{UPDATE_HOST}/api/github/repos/{REPO}/releases?per_page=10");
-    let resp = agent().get(&url).set("Accept", "application/vnd.github+json").call().map_err(|e| match e {
+    let url = format!("{UPDATE_HOST}/api/releases/repos/{REPO}/releases?per_page=10");
+    let resp = agent().get(&url).set("Accept", "application/json").call().map_err(|e| match e {
         ureq::Error::Status(404, _) => "Nie znaleziono wydań programu.".to_string(),
         ureq::Error::Status(403, _) => "Serwer aktualizacji odmówił dostępu — spróbuj później.".to_string(),
         ureq::Error::Status(c, _) => format!("Serwer zwrócił kod {c}."),

@@ -6,7 +6,6 @@ rust-version = "1.85"
 description = "AeroFlow — interaktywny tunel aerodynamiczny 2D (Lattice-Boltzmann, jednostki fizyczne)"
 authors = ["BlackSingularities"]
 license = "MIT"
-repository = "https://github.com/BlackSingularities/aeroflow"
 readme = "README.md"
 build = "build.rs"
 
