@@ -28,9 +28,7 @@ static CONFIG: OnceLock<Config> = OnceLock::new();
 
 /// Wywołaj raz na początku `main`. `dir_name` – folder w %LOCALAPPDATA% na plik awarii.
 pub fn install(slug: &'static str, name: &'static str, version: &'static str, dir_name: &str) {
-    let base = std::env::var_os("LOCALAPPDATA")
-        .map(PathBuf::from)
-        .unwrap_or_else(std::env::temp_dir);
+    let base = std::env::var_os("LOCALAPPDATA").map(PathBuf::from).unwrap_or_else(std::env::temp_dir);
     let dir = base.join(dir_name);
     if CONFIG.set(Config { slug, name, version, dir }).is_err() {
         return;
@@ -75,10 +73,7 @@ fn save_crash(info: &std::panic::PanicHookInfo<'_>) -> std::io::Result<()> {
 }
 
 fn now_ms() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis() as u64)
-        .unwrap_or(0)
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)
 }
 
 #[derive(Clone)]
@@ -121,23 +116,27 @@ fn base(include_device: bool) -> serde_json::Map<String, serde_json::Value> {
     m.insert("app".into(), c.map(|c| c.slug).unwrap_or("").into());
     m.insert("appName".into(), c.map(|c| c.name).unwrap_or("").into());
     m.insert("appVersion".into(), c.map(|c| c.version).unwrap_or("").into());
-    m.insert("platform".into(), if cfg!(target_os = "windows") { "windows" } else if cfg!(target_os = "macos") { "macos" } else { "linux" }.into());
+    m.insert(
+        "platform".into(),
+        if cfg!(target_os = "windows") {
+            "windows"
+        } else if cfg!(target_os = "macos") {
+            "macos"
+        } else {
+            "linux"
+        }
+        .into(),
+    );
     m.insert("locale".into(), locale().into());
     if include_device {
         m.insert("os".into(), os_name().into());
-        m.insert(
-            "extra".into(),
-            serde_json::json!({ "cpus": std::thread::available_parallelism().map(|n| n.get()).unwrap_or(0) }),
-        );
+        m.insert("extra".into(), serde_json::json!({ "cpus": std::thread::available_parallelism().map(|n| n.get()).unwrap_or(0) }));
     }
     m
 }
 
 fn post(body: serde_json::Map<String, serde_json::Value>) -> Result<(), String> {
-    let agent = ureq::AgentBuilder::new()
-        .timeout_connect(Duration::from_secs(10))
-        .timeout(Duration::from_secs(20))
-        .build();
+    let agent = ureq::AgentBuilder::new().timeout_connect(Duration::from_secs(10)).timeout(Duration::from_secs(20)).build();
     let text = serde_json::Value::Object(body).to_string();
     match agent.post(ENDPOINT).set("Content-Type", "application/json; charset=utf-8").send_string(&text) {
         Ok(_) => Ok(()),
@@ -270,11 +269,7 @@ impl FeedbackUi {
     }
 
     fn window(title: &str) -> egui::Window<'_> {
-        egui::Window::new(title)
-            .collapsible(false)
-            .resizable(false)
-            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
-            .default_width(440.0)
+        egui::Window::new(title).collapsible(false).resizable(false).anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0]).default_width(440.0)
     }
 
     fn email_field(&mut self, ui: &mut egui::Ui) {

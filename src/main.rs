@@ -2,8 +2,8 @@
 #![cfg_attr(all(not(debug_assertions), target_os = "windows"), windows_subsystem = "windows")]
 
 mod analysis;
-mod feedback;
 mod app;
+mod feedback;
 mod physics;
 mod prefs;
 mod render;
