@@ -334,6 +334,10 @@ impl App {
             ui.close();
         }
         ui.checkbox(&mut self.prefs.check_updates, "Sprawdzaj przy starcie");
+        if ui.button("Zgłoś błąd lub sugestię…").clicked() {
+            self.feedback.open();
+            ui.close();
+        }
         if ui.button("O programie").clicked() {
             self.win.about = true;
             ui.close();

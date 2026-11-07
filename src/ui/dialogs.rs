@@ -35,6 +35,7 @@ const SHORTCUTS: &[(&str, &str)] = &[
 
 impl App {
     pub fn windows(&mut self, ctx: &egui::Context) {
+        self.feedback.show(ctx);
         let mut open = self.win.shortcuts;
         egui::Window::new("Skróty klawiszowe")
             .open(&mut open)
@@ -84,6 +85,9 @@ impl App {
                             ui.ctx().open_url(egui::OpenUrl::new_tab("mailto:kontakt@redzikowski.com"));
                         }
                     });
+                    if ui.button("Zgłoś błąd lub sugestię…").clicked() {
+                        self.feedback.open();
+                    }
                     ui.add_space(4.0);
                     let coffee = egui::Button::new(RichText::new("☕ Postaw kawę").strong().color(theme::BG)).fill(theme::ACCENT);
                     if ui.add(coffee).clicked() {

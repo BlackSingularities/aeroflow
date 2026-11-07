@@ -2,6 +2,7 @@
 #![cfg_attr(all(not(debug_assertions), target_os = "windows"), windows_subsystem = "windows")]
 
 mod analysis;
+mod feedback;
 mod app;
 mod physics;
 mod prefs;
@@ -14,6 +15,7 @@ mod update;
 use std::path::PathBuf;
 
 fn main() -> eframe::Result<()> {
+    feedback::install("aeroflow", "AeroFlow", update::VERSION, "AeroFlow");
     env_logger::init();
     // aeroflow [plik.aeroflow] [--preset ID] [--field NAZWA] [--capture PLIK.png [--capture-after S]]
     let args: Vec<String> = std::env::args().skip(1).collect();
