@@ -1,0 +1,29 @@
+{
+  "slug": "aeroflow",
+  "name": "AeroFlow",
+  "label": "tunel aerodynamiczny 2D",
+  "icon": "icon.png",
+  "url": "https://redzikowski.com/portfolio/aeroflow",
+  "posters": [
+    {
+      "platform": "windows",
+      "file": "windows.png",
+      "title": "Opływ powietrza *na żywo*",
+      "lead": "Rysujesz profil skrzydła, walec albo samochód, a program liczy opływ, siły w niutonach i współczynniki oporu oraz nośności.",
+      "shots": [
+        {
+          "src": "../screenshots/windows/01.png",
+          "caption": "Profil NACA 0012 przy 16°"
+        }
+      ],
+      "features": [
+        "profile NACA",
+        "kształty rysowane pędzlem",
+        "Cd, Cl, Cm i Strouhal",
+        "obliczenia na GPU",
+        "ocena wiarygodności wyniku"
+      ],
+      "meta": "Windows 10 i 11 · Linux"
+    }
+  ]
+}

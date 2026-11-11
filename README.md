@@ -1,5 +1,13 @@
 # AeroFlow — interaktywny tunel aerodynamiczny 2D
 
+<!-- posters:start -->
+<p align="center">
+  <img src="docs/posters/windows.png" alt="AeroFlow – Windows" width="460">
+</p>
+
+<p align="center"><a href="https://redzikowski.com/portfolio/aeroflow">redzikowski.com/portfolio/aeroflow</a></p>
+<!-- posters:end -->
+
 Natywna aplikacja (Rust) do symulacji opływu ciał w czasie rzeczywistym — metodą siatkową Boltzmanna, **w jednostkach fizycznych**.
 Rysujesz profile lotnicze, walce, budynki czy samochód, wybierasz płyn, temperaturę i prędkość, a program liczy przepływ, siły w niutonach,
 współczynniki Cd/Cl/Cm, liczbę Strouhala, rozkład ciśnienia na powierzchni i biegunową profilu. Każdy wynik ma ocenę wiarygodności,
